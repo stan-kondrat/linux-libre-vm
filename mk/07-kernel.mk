@@ -10,8 +10,8 @@
 # Architecture mappings:
 #   x86_64:  target=bzImage, cross=x86_64-linux-gnu-, config=kernel-x86_64.config
 #   arm64:   target=Image.gz, cross=aarch64-linux-gnu-, config=kernel-arm64.config
-#
-# Kernel config paths are defined in 06-toolchain.mk (shared with linux-headers).
+
+# Kernel config paths (defined in 00-vars.mk)
 
 KERNEL_TARGET_x86_64    := bzImage
 KERNEL_CROSS_x86_64     := $(CROSS_x86_64)
@@ -22,6 +22,10 @@ KERNEL_TARGET_arm64     := Image.gz
 KERNEL_CROSS_arm64      := $(CROSS_arm64)
 KERNEL_OUT_arm64        := $(BUILD_DIR_arm64)/linux-libre/arch/arm64/boot/Image.gz
 KERNEL_INSTALL_arm64    := $(ROOTFS_arm64)/boot/vmlinuz
+
+# Copy linux-libre sources to build dirs (per-target)
+$(eval $(call COPY_PKG,linux-libre,x86_64))
+$(eval $(call COPY_PKG,linux-libre,arm64))
 
 # Build all architectures
 kernel: kernel-x86_64 kernel-arm64

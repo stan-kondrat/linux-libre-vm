@@ -67,6 +67,10 @@ SOURCES_PATCHES_DIR  := $(CURDIR)/sources-patches
 GNULIB_DIR           := $(SOURCES_DIR)/gnulib
 LINUX_LIBRE_DIR     := $(SOURCES_DIR)/linux-libre
 
+# ── Kernel config paths (in project root, tracked by git) ─────────────────
+KERNEL_CONFIG_x86_64 := $(CURDIR)/kernel-x86_64.config
+KERNEL_CONFIG_arm64  := $(CURDIR)/kernel-arm64.config
+
 FAKE_BIN            := $(CURDIR)/build/fake-bin
 FAKE_BIN_PATH       := $(FAKE_BIN):$(PATH)
 

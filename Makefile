@@ -16,3 +16,4 @@ include mk/05-packages.mk
 include mk/07-kernel.mk
 include mk/08-clean-help.mk
 include mk/09-init.mk
+include mk/10-disk.mk

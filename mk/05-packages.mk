@@ -187,9 +187,12 @@ consolidate-bin-$(1):
 	  mv "$(ROOTFS_$(1))/sbin/"* "$(ROOTFS_$(1))/bin/" 2>/dev/null || true; \
 	  rmdir "$(ROOTFS_$(1))/sbin" 2>/dev/null || true; \
 	fi
-	# Create /sbin/init -> /bin/runit-init symlink (kernel looks for /sbin/init)
+	# Create /sbin/ symlinks for hardcoded paths
 	mkdir -p "$(ROOTFS_$(1))/sbin"
-	ln -sf /bin/runit-init "$(ROOTFS_$(1))/sbin/init"
+	ln -sf /bin/runit-init "$(ROOTFS_$(1))/sbin/init"   # kernel looks for /sbin/init
+	ln -sf /bin/runit      "$(ROOTFS_$(1))/sbin/runit"   # runit-init looks for /sbin/runit
+	# Create /bin/sh -> /bin/bash symlink (scripts use #!/bin/sh)
+	ln -sf /bin/bash "$(ROOTFS_$(1))/bin/sh" 2>/dev/null || true
 	@echo "=== Binaries consolidated ($(1)) ==="
 endef
 

@@ -118,12 +118,28 @@ linux-vm/
 ├── TODO.md                      detailed build plan
 ├── .gitignore
 ├── .gitmodules
-├── kernel-x86_64.config         x86_64 kernel config (tinyconfig-based)
-├── kernel-arm64.config          arm64 kernel config (tinyconfig-based)
+├── kernel-x86_64.config         x86_64 kernel config (super minimal, no IPv6)
+├── kernel-arm64.config          arm64 kernel config (super minimal, no IPv6)
+├── disk-x86_64.img              bootable disk image (gitignored)
+├── disk-arm64.img               bootable disk image (gitignored)
 │
-├── minimal-libre.tar.gz         packaged rootfs (aspirational)
-├── strip.sh                     post-build stripping script
-└── qemu-test.sh                 QEMU launch script
+├── templates/                   init system template files (tracked in git)
+│   └── etc/                     /etc skeleton for rootfs
+│       ├── fstab
+│       ├── passwd / group / shadow
+│       ├── hostname / hosts / resolv.conf
+│       ├── runit/{1,2,3,ctrlaltdel}
+│       └── service/getty-TTY/{run,finish,log/run}
+│
+├── mk/
+│   ├── ... (Makefile fragments)
+│   ├── install-init.sh          (removed, inlined into 09-init.mk)
+│   └── create-disk.sh           guestfish-based disk image creation script
+│
+├── README.md                    this file
+├── TODO.md                      detailed build plan
+├── .gitignore
+└── .gitmodules
 ```
 
 ---
@@ -149,6 +165,11 @@ architecture and determines which target is native vs cross.
 - **patch** — for applying source patches
 - **xz** — XZ compression utility (gnulib bootstrap)
 - **rsync** — for copying source trees during the prepare step
+- **bc** — basic calculator (needed by kernel build for `timeconst.h` generation)
+- **elfutils-devel** — `libelf` headers (needed by kernel objtool for ORC unwinding)
+- **libguestfs** — provides `guestfish` for rootless disk image creation
+- **supermin** — appliance builder needed by guestfish at runtime
+- **qemu** (qemu-system-x86_64, qemu-system-aarch64) — for testing the disk image
 - **system C library headers** (e.g., `kernel-libc-headers` on Void)
 
 **Cross-compiler package (one of the following, depending on host):**
@@ -228,6 +249,14 @@ make ARCH=x86_64 kernel               # x86_64 kernel only
 make install                          # install everything to rootfs/
 make ARCH=x86_64 install              # install x86_64 only
 make install-kernel                   # install both kernels
+
+# Disk image (requires guestfish from libguestfs)
+make disk-image                       # create bootable disk images for both targets
+make ARCH=x86_64 disk-image           # x86_64 only
+
+# QEMU test (requires qemu-system-*)
+make qemu-x86_64                      # boot x86_64 in QEMU
+make qemu-arm64                       # boot arm64 in QEMU
 
 # Clean
 make clean                            # remove build artifacts

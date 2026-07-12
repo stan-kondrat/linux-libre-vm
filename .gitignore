@@ -13,9 +13,10 @@ rootfs/
 # Bootloader binary
 bootsect.bin
 
-# Disk image
+# Disk images
 disk.img
 *.qcow2
+disks/
 /testsuite/
 /library/
 /local/
