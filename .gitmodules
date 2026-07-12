@@ -1,0 +1,60 @@
+[submodule "sources/bash"]
+	path = sources/bash
+	url = https://git.savannah.gnu.org/git/bash.git
+[submodule "sources/coreutils"]
+	path = sources/coreutils
+	url = https://git.savannah.gnu.org/git/coreutils.git
+[submodule "sources/grep"]
+	path = sources/grep
+	url = https://git.savannah.gnu.org/git/grep.git
+[submodule "sources/sed"]
+	path = sources/sed
+	url = https://git.savannah.gnu.org/git/sed.git
+[submodule "sources/gawk"]
+	path = sources/gawk
+	url = https://git.savannah.gnu.org/git/gawk.git
+[submodule "sources/findutils"]
+	path = sources/findutils
+	url = https://git.savannah.gnu.org/git/findutils.git
+[submodule "sources/diffutils"]
+	path = sources/diffutils
+	url = https://git.savannah.gnu.org/git/diffutils.git
+[submodule "sources/gzip"]
+	path = sources/gzip
+	url = https://git.savannah.gnu.org/git/gzip.git
+[submodule "sources/tar"]
+	path = sources/tar
+	url = https://git.savannah.gnu.org/git/tar.git
+[submodule "sources/vim"]
+	path = sources/vim
+	url = https://github.com/vim/vim.git
+[submodule "sources/glibc"]
+	path = sources/glibc
+	url = https://sourceware.org/git/glibc.git
+[submodule "sources/procps-ng"]
+	path = sources/procps-ng
+	url = https://gitlab.com/procps-ng/procps.git
+[submodule "sources/iproute2"]
+	path = sources/iproute2
+	url = https://git.kernel.org/pub/scm/network/iproute2/iproute2.git
+[submodule "sources/util-linux"]
+	path = sources/util-linux
+	url = https://git.kernel.org/pub/scm/utils/util-linux/util-linux.git
+[submodule "sources/runit"]
+	path = sources/runit
+	url = https://github.com/g-pape/runit.git
+[submodule "sources/dhcpcd"]
+	path = sources/dhcpcd
+	url = https://github.com/NetworkConfiguration/dhcpcd.git
+[submodule "sources/linux-libre"]
+	path = sources/linux-libre
+	url = git://linux-libre.fsfla.org/releases.git
+[submodule "sources/binutils"]
+	path = sources/binutils
+	url = git://sourceware.org/git/binutils-gdb.git
+[submodule "sources/gcc"]
+	path = sources/gcc
+	url = https://gcc.gnu.org/git/gcc.git
+[submodule "sources/gnulib"]
+	path = sources/gnulib
+	url = git://git.sv.gnu.org/gnulib.git

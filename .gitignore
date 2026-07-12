@@ -1,0 +1,20 @@
+# Build artifacts
+build/
+build-logs/
+
+# Patched source trees (copied from submodules + patches)
+sources-build/
+sources-patched/
+
+# Staging rootfs
+rootfs/
+
+# Cross-compiler toolchain (built from source)
+toolchain/
+
+# Bootloader binary
+bootsect.bin
+
+# Disk image
+disk.img
+*.qcow2
