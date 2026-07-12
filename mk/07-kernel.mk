@@ -49,7 +49,7 @@ kernel-reconfig-x86_64:
 	cd "$(BUILD_DIR_x86_64)/linux-libre" && \
 	  make ARCH=x86_64 CROSS_COMPILE=$(KERNEL_CROSS_x86_64) tinyconfig && \
 	  cp .config "$(KERNEL_CONFIG_x86_64)"
-	@echo "Now edit $(KERNEL_CONFIG_x86_64), then run 'make kernel-x86_64'"
+	@echo "Now edit $(KERNEL_CONFIG_x86_64), then run 'make ARCH=x86_64 kernel'"
 
 install-kernel-x86_64: kernel-x86_64
 	@echo "=== Installing x86_64 kernel ==="
@@ -78,7 +78,7 @@ kernel-reconfig-arm64:
 	cd "$(BUILD_DIR_arm64)/linux-libre" && \
 	  make ARCH=arm64 CROSS_COMPILE=$(KERNEL_CROSS_arm64) tinyconfig && \
 	  cp .config "$(KERNEL_CONFIG_arm64)"
-	@echo "Now edit $(KERNEL_CONFIG_arm64), then run 'make kernel-arm64'"
+	@echo "Now edit $(KERNEL_CONFIG_arm64), then run 'make ARCH=arm64 kernel'"
 
 install-kernel-arm64: kernel-arm64
 	@echo "=== Installing arm64 kernel ==="
@@ -90,3 +90,13 @@ install-kernel-arm64: kernel-arm64
 
 install-kernel: install-kernel-x86_64 install-kernel-arm64
 	@echo "=== All kernels installed ==="
+
+# ═════════════════════════════════════════════════════════════════════════════
+# ARCH-aware delegation targets (make ARCH=x86_64 kernel, etc.)
+# ═════════════════════════════════════════════════════════════════════════════
+
+ifneq ($(ARCH),)
+kernel: kernel-$(ARCH)
+install-kernel: install-kernel-$(ARCH)
+kernel-reconfig: kernel-reconfig-$(ARCH)
+endif

@@ -1,0 +1,11 @@
+--- a/src/ls.c
++++ b/src/ls.c
+@@ -3311,7 +3311,7 @@ file_has_aclinfo_cache (char const *file, struct fileinfo *f,
+ 
+   if (f->stat.st_dev == unsupported_device)
+     {
+-      ai->buf = ai->u.__gl_acl_ch;
++      ai->buf = ai->u._gl_acl_ch;
+       ai->size = 0;
+       ai->scontext = unsupported_scontext;
+       ai->scontext_err = unsupported_scontext_err;

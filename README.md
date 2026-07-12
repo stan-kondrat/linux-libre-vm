@@ -4,7 +4,7 @@ Build a stripped-down GNU/Linux system from scratch using Linux-libre kernel, GN
 
 **Target:** x86_64 (amd64), arm64 (aarch64) on QEMU/KVM with virtio drivers only.
 
-**Build host:** Void Linux (aarch64)
+**Build host:** Void Linux (x86_64 or aarch64) — auto-detected
 
 ---
 
@@ -28,9 +28,9 @@ git submodule update --remote sources/<name>
 | Package | Repository | Current Version | Notes |
 |---------|-----------|-----------------|-------|
 | linux-libre | `git://linux-libre.fsfla.org/releases.git` | `sources/v7.1.3-gnu` | deblobbed kernel |
-| gcc | `https://gcc.gnu.org/git/gcc.git` | `basepoints/gcc-17-1907` | GNU C compiler |
-| glibc | `https://sourceware.org/git/glibc.git` | `glibc-2.43` | GNU C library |
-| binutils | `git://sourceware.org/git/binutils-gdb.git` | `binutils-2_46` | GNU binutils |
+| gcc | `https://gcc.gnu.org/git/gcc.git` | `basepoints/gcc-17` | GNU C compiler (reference only, not built) |
+| glibc | `https://sourceware.org/git/glibc.git` | `glibc-2.43` | GNU C library (reference only, not built) |
+| binutils | `git://sourceware.org/git/binutils-gdb.git` | `binutils-2_46` | GNU binutils (reference only, not built) |
 | bash | `https://git.savannah.gnu.org/git/bash.git` | `bash-5.3` | GNU bash shell |
 | coreutils | `https://git.savannah.gnu.org/git/coreutils.git` | `v9.6` | GNU coreutils |
 | grep | `https://git.savannah.gnu.org/git/grep.git` | `v3.11` | GNU grep |
@@ -64,7 +64,6 @@ linux-vm/
 │   ├── 03-source-prep.mk       copy + patch pipeline (sources → sources-patched)
 │   ├── 04-build-rules.mk       per-package build rule macros (all 19 packages)
 │   ├── 05-packages.mk          package declarations, aliases, install targets
-│   ├── 06-toolchain.mk         cross-compiler (binutils → glibc → gcc)
 │   ├── 07-kernel.mk            Linux-libre kernel (x86_64 + arm64)
 │   ├── 08-clean-help.mk        clean, distclean, help
 │   └── tee-log.sh              LOG=1 tee wrapper for per-target logs
@@ -110,13 +109,9 @@ linux-vm/
 │   ├── x86_64/                  x86_64 root
 │   └── arm64/                   arm64 root
 │
-├── toolchain/                   cross-compiler install (gitignored)
-│   ├── x86_64/bin/              x86_64 cross-tools
-│   └── arm64/bin/               arm64 cross-tools
-│
 ├── build-logs/                  per-target build logs (gitignored)
-│   ├── build-coreutils-x86_64.log
-│   ├── kernel-x86_64.log
+│   ├── build-coreutils.log
+│   ├── kernel.log
 │   └── ...
 │
 ├── README.md                    this file
@@ -137,6 +132,41 @@ linux-vm/
 
 The Makefile (`Makefile`) orchestrates all builds. It's split into modular fragments under `mk/`.
 
+### Host Prerequisites
+
+The toolchain (cross-compiler) is **not built from source** — it must be installed
+from the host distribution's packages. The build system auto-detects the host
+architecture and determines which target is native vs cross.
+
+**Required on all hosts:**
+
+- **make** — to drive the build system
+- **gcc** — host native compiler (used for the native target)
+- **autoconf** — for regenerating configure scripts (gnulib-based packages)
+- **automake** — for regenerating Makefile.in files (gnulib bootstrap)
+- **gettext** — internationalization framework (gnulib bootstrap)
+- **texinfo** — provides `makeinfo` and `texi2pdf` (gnulib bootstrap)
+- **patch** — for applying source patches
+- **xz** — XZ compression utility (gnulib bootstrap)
+- **rsync** — for copying source trees during the prepare step
+- **system C library headers** (e.g., `kernel-libc-headers` on Void)
+
+**Cross-compiler package (one of the following, depending on host):**
+
+| Host architecture | Install for cross target |
+|---|---|
+| x86_64 | `xbps-install -S cross-aarch64-linux-gnu cross-aarch64-linux-gnu-libc` |
+| aarch64 | `xbps-install -S cross-x86_64-linux-gnu cross-x86_64-linux-gnu-libc` |
+
+On other distributions (Debian, Arch, etc.) the cross-compiler packages
+have similar names (e.g., `gcc-aarch64-linux-gnu` on Debian).
+
+For Debian/Ubuntu:
+```bash
+apt install autoconf automake gettext texinfo patch xz-utils rsync
+```
+
+
 ### Build Pipeline
 
 ```
@@ -153,48 +183,62 @@ All 19 packages flow through this pipeline — **`sources/` is never modified**.
 ### Build Order
 
 ```
-1. toolchain-x86_64  (binutils → linux-headers → glibc-headers → gcc-stage1 → glibc → gcc-final)
-2. userland-x86_64   (all 15 packages, auto-depends on toolchain)
-3. kernel-x86_64     (linux-libre, independent of userland)
+1. toolchain-<target>  (validation only — host-provided cross-compiler check)
+2. userland-<target>   (all 15 packages, auto-depends on toolchain)
+3. kernel-<target>     (linux-libre, independent of userland)
 ```
 
-Userland package targets automatically depend on `toolchain-<target>` (order-only prerequisite).
+Userland package targets automatically depend on `check-toolchain-<target>`
+(order-only prerequisite), which validates that the host toolchain is available.
+No toolchain sources are compiled — the cross-compiler comes from the host OS.
+
+### Auto-detection
+
+The build system detects the host architecture and configures accordingly:
+
+- **On x86_64 host:** x86_64 target uses native `gcc`; arm64 target uses `aarch64-linux-gnu-` cross
+- **On aarch64 host:** arm64 target uses native `gcc`; x86_64 target uses `x86_64-linux-gnu-` cross
+
+Run `make check-env` or `make help` to see the detected configuration.
 
 ### Basic Usage
 
 ```bash
-# Show all targets
+# Show all targets and detected toolchain config
 make help
 
-# Prepare patched sources (copy + patch, no build)
-make prepare-sources                  # all packages
-make prepare-sources-coreutils        # one package
+# Check environment (validates toolchain availability)
+make check-env
 
-# Build toolchain (cross-compiler)
-make toolchain-x86_64                 # full 6-step toolchain for x86_64
+# Build everything
+make build                            # all userland + kernel, both targets
 
 # Build userland
-make all                              # all userland for all targets
-make coreutils                        # one package, all targets
-make build-coreutils-x86_64           # one package, one target
+make userland                         # all userland for both targets
+make coreutils                        # one package, both targets (alias)
+make build-coreutils                  # one package, both targets
+make ARCH=x86_64 build-coreutils      # one package, x86_64 only
+make ARCH=arm64 build-coreutils       # one package, arm64 only
 
 # Build kernel
-make kernel-x86_64                    # kernel for x86_64
+make kernel                           # both kernels
+make ARCH=x86_64 kernel               # x86_64 kernel only
 
 # Install
 make install                          # install everything to rootfs/
-make install-x86_64                   # install x86_64 only
+make ARCH=x86_64 install              # install x86_64 only
+make install-kernel                   # install both kernels
 
 # Clean
 make clean                            # remove build artifacts
-make distclean                        # clean + remove rootfs + toolchain
+make distclean                        # clean + remove rootfs
 ```
 
 ### Logging
 
 ```bash
-make build-coreutils-x86_64 LOG=1     # → build-logs/build-coreutils-x86_64.log
-make all LOG=1                         # → build-logs/all.log
+make ARCH=x86_64 build-coreutils LOG=1   # → build-logs/build-coreutils.log
+make build LOG=1                         # → build-logs/build.log
 ```
 
 Each run overwrites the log (always the latest). For per-package sequential builds with timestamped logs, use `build-one-by-one.sh`.
@@ -207,8 +251,8 @@ Each run overwrites the log (always the latest). For per-package sequential buil
 | **GIT_AUTORECONF_RULES** (autoreconf, no gnulib) | procps-ng, util-linux |
 | **GIT_CONFIGURE_RULES** (direct configure) | bash, gawk |
 | **Custom** | vim, iproute2, runit, dhcpcd |
-| **Toolchain** (6-step) | binutils, linux-headers, glibc, gcc |
 | **In-tree build** | linux-libre (kernel) |
+| **Host-provided** (not built) | binutils, gcc, glibc (sources for reference only) |
 
 ### Common Flags
 
@@ -254,7 +298,7 @@ Host tools not available on the build host are stubbed via `build/fake-bin/`:
 
 ### Packages Covered
 
-- ✅ Toolchain: binutils, glibc, gcc
+- ✅ Toolchain: binutils, glibc, gcc **(host-provided, not built from source)**
 - ✅ Userland (15/15): coreutils, bash, grep, sed, gawk, findutils, diffutils, gzip, tar, vim, iproute2, procps-ng, util-linux, runit, dhcpcd
 - ✅ Kernel: linux-libre (both x86_64 + arm64)
 

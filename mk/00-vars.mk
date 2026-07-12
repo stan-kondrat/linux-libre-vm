@@ -12,11 +12,46 @@ HOST_TRIPLET    := $(shell gcc -dumpmachine)
 TARGETS         := x86_64 arm64
 
 # ── Per-target triplet and cross prefix ────────────────────────────────────
-TRIPLET_x86_64  := x86_64-linux-gnu
-TRIPLET_arm64   := aarch64-linux-gnu
+# Toolchain is provided by the host system, not built from source.
+# Auto-detection: whichever target matches the host architecture is native;
+# the other target uses a system-provided cross-compiler.
+#
+# On x86_64 hosts (e.g., amd64 laptop):
+#   x86_64 → native (gcc, ar, ld from host PATH)
+#   arm64  → cross-aarch64-linux-gnu (prefix: aarch64-linux-gnu-)
+#
+# On aarch64 hosts (e.g., Apple M1, ARM server):
+#   arm64  → native (gcc, ar, ld from host PATH)
+#   x86_64 → cross-x86_64-linux-gnu (prefix: x86_64-linux-gnu-)
 
-CROSS_x86_64     = $(TOOLCHAIN_PREFIX)/x86_64/bin/x86_64-linux-gnu-
-CROSS_arm64      = $(TOOLCHAIN_PREFIX)/arm64/bin/aarch64-linux-gnu-
+# Common system bin paths (always available for native tools)
+SYS_BIN := /usr/bin
+
+ifeq ($(HOST_ARCH),x86_64)
+  TRIPLET_x86_64  := $(HOST_TRIPLET)
+  CROSS_x86_64    :=
+  TC_PATH_x86_64  := $(SYS_BIN)
+  SYSROOT_x86_64  :=
+
+  TRIPLET_arm64   := aarch64-linux-gnu
+  CROSS_arm64     := aarch64-linux-gnu-
+  TC_PATH_arm64   := $(SYS_BIN)
+  SYSROOT_arm64   := /usr/aarch64-linux-gnu
+
+else ifeq ($(HOST_ARCH),aarch64)
+  TRIPLET_arm64   := $(HOST_TRIPLET)
+  CROSS_arm64     :=
+  TC_PATH_arm64   := $(SYS_BIN)
+  SYSROOT_arm64   :=
+
+  TRIPLET_x86_64  := x86_64-linux-gnu
+  CROSS_x86_64    := x86_64-linux-gnu-
+  TC_PATH_x86_64  := $(SYS_BIN)
+  SYSROOT_x86_64  := /usr/x86_64-linux-gnu
+
+else
+  $(error Unsupported host architecture: $(HOST_ARCH). Expected x86_64 or aarch64.)
+endif
 
 # ── Per-target directories ─────────────────────────────────────────────────
 ROOTFS_x86_64           := $(CURDIR)/rootfs/x86_64
@@ -35,19 +70,12 @@ LINUX_LIBRE_DIR     := $(SOURCES_DIR)/linux-libre
 FAKE_BIN            := $(CURDIR)/build/fake-bin
 FAKE_BIN_PATH       := $(FAKE_BIN):$(PATH)
 
-# ── Cross-compiler toolchain ───────────────────────────────────────────────
-TOOLCHAIN_PREFIX    := $(CURDIR)/toolchain
-TC_PATH_x86_64      := $(TOOLCHAIN_PREFIX)/x86_64/bin
-TC_PATH_arm64       := $(TOOLCHAIN_PREFIX)/arm64/bin
-SYSROOT_x86_64      := $(TOOLCHAIN_PREFIX)/x86_64/sysroot
-SYSROOT_arm64       := $(TOOLCHAIN_PREFIX)/arm64/sysroot
-
 PARALLEL            := -j$$(nproc)
 STRIP               := 1
 
 # ── Logging ────────────────────────────────────────────────────────────────
 # make <target> LOG=1  →  tee all output to build-logs/<target>.log
-# Example: make build-coreutils-x86_64 LOG=1 → build-logs/build-coreutils-x86_64.log
+# Example: make ARCH=x86_64 build-coreutils LOG=1 → build-logs/build-coreutils.log
 LOG_DIR := $(CURDIR)/build-logs
 
 ifdef LOG
@@ -66,3 +94,9 @@ USERLAND_CONFIG := \
     --prefix=/usr \
     --disable-nls \
     --disable-silent-rules
+
+# Per-package/architecture extra configure flags
+# Usage: $(PKG)_CONFIGURE_$(ARCH) = --extra-flag
+# The variable name is constructed from the package name (with hyphens) and arch:
+#   $$($$(1)_CONFIGURE_$(2)) in build macros
+procps-ng_CONFIGURE_arm64 := --without-ncurses

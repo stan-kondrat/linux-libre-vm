@@ -9,8 +9,6 @@ sources-patched/
 # Staging rootfs
 rootfs/
 
-# Cross-compiler toolchain (built from source)
-toolchain/
 
 # Bootloader binary
 bootsect.bin
@@ -18,3 +16,7 @@ bootsect.bin
 # Disk image
 disk.img
 *.qcow2
+/testsuite/
+/library/
+/local/
+/po-man/

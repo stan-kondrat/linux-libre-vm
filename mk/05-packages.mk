@@ -61,8 +61,11 @@ userland: userland-x86_64 userland-arm64
 	@echo "=== All userland packages built (all targets) ==="
 
 all: check-env build-dirs userland
+
+build: check-env build-dirs userland kernel
+	@echo "=== All packages + kernel built for all targets ==="
 	@echo "=== All packages built for all targets ==="
-	@echo "  Run 'make install-all' to install all, or 'make install-x86_64' / 'make install-arm64'"
+	@echo "  Run 'make install' to install all, or 'make ARCH=x86_64 install' / 'make ARCH=arm64 install'"
 
 # ═════════════════════════════════════════════════════════════════════════════
 # Per-target install targets
@@ -131,3 +134,17 @@ prune-docs-arm64:
 	-rm -rf "$(ROOTFS_arm64)"/usr/share/locale
 	-rm -rf "$(ROOTFS_arm64)"/tmp/*
 	-rm -rf "$(ROOTFS_arm64)"/var/cache
+
+# ═════════════════════════════════════════════════════════════════════════════
+# ARCH-aware delegation targets (make ARCH=x86_64 build-coreutils, etc.)
+# ═════════════════════════════════════════════════════════════════════════════
+
+ifneq ($(ARCH),)
+$(foreach pkg,$(USERLAND_PKGS),$(eval build-$(pkg): build-$(pkg)-$(ARCH)))
+$(foreach pkg,$(USERLAND_PKGS),$(eval install-$(pkg): install-$(pkg)-$(ARCH)))
+userland: userland-$(ARCH)
+install: install-$(ARCH)
+else
+$(foreach pkg,$(USERLAND_PKGS),$(eval build-$(pkg): build-$(pkg)-x86_64 build-$(pkg)-arm64))
+$(foreach pkg,$(USERLAND_PKGS),$(eval install-$(pkg): install-$(pkg)-x86_64 install-$(pkg)-arm64))
+endif

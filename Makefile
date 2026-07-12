@@ -13,6 +13,5 @@ include mk/02-fake-bin.mk
 include mk/03-source-prep.mk
 include mk/04-build-rules.mk
 include mk/05-packages.mk
-include mk/06-toolchain.mk
 include mk/07-kernel.mk
 include mk/08-clean-help.mk

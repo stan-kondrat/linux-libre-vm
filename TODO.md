@@ -1,7 +1,7 @@
 # Super Minimal Linux Libre — Build Plan
 
-**Status:** Build system complete for all 19 packages. Phases 1-3 ready.
-**Next:** Phase 4 (Init), Phase 5 (Rootfs), Phase 6 (QEMU test).
+**Status:** All 15 userland packages build cleanly for both x86_64 and arm64. Phases 1-3 complete.
+**Next:** Phase 4 (Init system + /etc skeleton).
 
 **Goal:** Build a stripped-down GNU/Linux system using Linux-libre kernel, GNU coreutils, glibc, and GCC — no non-free firmware, minimal attack surface, minimal footprint.
 
@@ -43,7 +43,7 @@ The Makefile is modularized under `mk/`:
 | 0 | Foundations — project structure, Makefile, patches | ✅ Complete |
 | 1 | Linux-libre kernel | ✅ Complete |
 | 2 | GCC + glibc + binutils toolchain | ✅ Make targets ready |
-| **3** | **Minimal GNU userland** | **✅ 15/15 packages building** |
+| **3** | **Minimal GNU userland** | **✅ 15/15 packages building — all issues fixed** |
 | 4 | Init system + `/etc` skeleton | ⏳ Not started |
 | 5 | Strip, minimize, harden | ⏳ Not started |
 | 5.5 | MBR disk image + bootloader | ⏳ Not started |
@@ -52,30 +52,30 @@ The Makefile is modularized under `mk/`:
 
 ### Package Build Status
 
-| # | Package | Build System | Status | Notes |
-|---|---------|-------------|--------|-------|
-| 1 | binutils | autotools (out-of-tree) | 🟡 | Cross-toolchain target exists |
-| 2 | linux-headers | kernel headers install | 🟡 | Prepares sysroot for glibc |
-| 3 | gcc stage1 | autotools (out-of-tree) | 🟡 | C only, `--without-headers` |
-| 4 | glibc | autotools (out-of-tree) | 🟡 | Full install to sysroot |
-| 5 | gcc final | autotools (out-of-tree) | 🟡 | C/C++, shared libs |
-| 6 | coreutils | gnulib bootstrap | ✅ | |
-| 7 | bash | direct configure | ✅ | |
-| 8 | grep | gnulib bootstrap | ✅ | |
-| 9 | sed | gnulib bootstrap | ✅ | |
-| 10 | gawk | direct configure | ✅ | |
-| 11 | findutils | gnulib bootstrap | ✅ | |
-| 12 | diffutils | gnulib bootstrap | ✅ | |
-| 13 | gzip | gnulib bootstrap | ✅ | Patch: `head` → `gzip_head` |
-| 14 | tar | gnulib bootstrap | ✅ | Needs paxutils stubs |
-| 15 | vim | custom | ✅ | Tiny features, no GUI |
-| 16 | iproute2 | custom configure | ✅ | |
-| 17 | procps-ng | autoreconf | ✅ | |
-| 18 | util-linux | autoreconf | ✅ | Needs gtkdocize stub |
-| 19 | runit | custom (package/compile) | ✅ | |
-| 20 | dhcpcd | custom configure | ✅ | |
-| 21 | linux-libre (x86_64) | in-tree | ✅ | 2.3 MB bzImage |
-| 22 | linux-libre (arm64) | in-tree | ✅ | 2.4 MB Image.gz |
+| # | Package | Build System | x86_64 | arm64 | Notes |
+|---|---------|-------------|--------|-------|-------|
+| 1 | binutils | autotools (out-of-tree) | 🟡 | 🟡 | Cross-toolchain target exists |
+| 2 | linux-headers | kernel headers install | 🟡 | 🟡 | Prepares sysroot for glibc |
+| 3 | gcc stage1 | autotools (out-of-tree) | 🟡 | 🟡 | C only, `--without-headers` |
+| 4 | glibc | autotools (out-of-tree) | 🟡 | 🟡 | Full install to sysroot |
+| 5 | gcc final | autotools (out-of-tree) | 🟡 | 🟡 | C/C++, shared libs |
+| 6 | coreutils | gnulib bootstrap | ✅ | ✅ aarch64 | |
+| 7 | bash | direct configure | ✅ | ✅ aarch64 | |
+| 8 | grep | gnulib bootstrap | ✅ | ✅ aarch64 | |
+| 9 | sed | gnulib bootstrap | ✅ | ✅ aarch64 | |
+| 10 | gawk | direct configure | ✅ | ✅ aarch64 | |
+| 11 | findutils | gnulib bootstrap | ✅ | ✅ aarch64 | |
+| 12 | diffutils | gnulib bootstrap | ✅ | ✅ aarch64 | |
+| 13 | gzip | gnulib bootstrap | ✅ | ✅ aarch64 | Patch: `head` → `gzip_head` |
+| 14 | tar | gnulib bootstrap | ✅ | ✅ aarch64 | |
+| 15 | vim | custom | ✅ | ✅ aarch64 | arm64 uses termcap stub (`sources-patches/vim/termcap-stub.c`), x86_64 uses system ncurses |
+| 16 | iproute2 | custom configure | ✅ | ✅ aarch64 | |
+| 17 | procps-ng | autoreconf | ✅ | ✅ aarch64 | arm64 built with `--without-ncurses` (slabtop/hugetop/top/watch excluded) |
+| 18 | util-linux | autoreconf | ✅ | ✅ aarch64 | |
+| 19 | runit | custom (package/compile) | ✅ | ✅ aarch64 | runit binary is statically linked |
+| 20 | dhcpcd | custom configure | ✅ | ✅ aarch64 | |
+| 21 | linux-libre (x86_64) | in-tree | ✅ | — | 2.3 MB bzImage |
+| 22 | linux-libre (arm64) | in-tree | — | ✅ | 2.4 MB Image.gz |
 
 ---
 
@@ -109,10 +109,27 @@ The Makefile is modularized under `mk/`:
 
 ## Phase 6 — Verification (⏳)
 
-- [ ] QEMU boot test
+### QEMU Boot Test
+
+- [ ] Boot kernel with initramfs via QEMU:
+      ```
+      qemu-system-x86_64 -kernel path/to/bzImage -initrd path/to/initramfs -nographic -append "console=ttyS0"
+      ```
+- [ ] Parse serial console stdout and confirm:
+      - Kernel boots without panics
+      - **runit** (or init script) starts and spawns a shell
+      - `agetty` or shell presents a **root prompt** (`/ #` or `root@host:~#`)
+      - System is responsive to keyboard input
+- [ ] Verify filesystem mounts correctly (proc, sysfs, devtmpfs)
+- [ ] Test basic commands: `ls`, `ps`, `cat /proc/version`
+- [ ] Shutdown gracefully
+
+### Metrics
+
 - [ ] Measure sizes (kernel < 5 MB, rootfs < 100 MB)
 - [ ] Measure RAM usage (< 64 MB idle)
-- [ ] Verify no non-free firmware loaded
+- [ ] Verify no non-free firmware loaded (`dmesg | grep -i firmware`)
+- [ ] Count running processes (< 15)
 - [ ] Package: `tar -cvzf minimal-libre.tar.gz rootfs`
 
 ---
