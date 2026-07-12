@@ -19,7 +19,7 @@ mount -t tmpfs tmpfs /dev/shm -o nosuid,noexec,nodev,mode=1777
 ln -sf /etc/service /service 2>/dev/null || true
 
 # Set hostname
-cat /etc/hostname 2>/dev/null | xargs hostname 2>/dev/null || hostname linux-libre
+cat /etc/hostname 2>/dev/null > /proc/sys/kernel/hostname 2>/dev/null || echo linux-libre > /proc/sys/kernel/hostname
 
 # Configure loopback
 ip link set lo up 2>/dev/null || true

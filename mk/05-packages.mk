@@ -77,6 +77,7 @@ install-x86_64: userland-x86_64
 	for pkg in $(USERLAND_PKGS); do \
 	  $(MAKE) install-$$pkg-x86_64; \
 	done
+	$(MAKE) install-libs-x86_64
 	$(MAKE) strip-all-x86_64 2>/dev/null || true
 	$(MAKE) prune-docs-x86_64 2>/dev/null || true
 	$(MAKE) consolidate-bin-x86_64
@@ -89,6 +90,7 @@ install-arm64: userland-arm64
 	for pkg in $(USERLAND_PKGS); do \
 	  $(MAKE) install-$$pkg-arm64; \
 	done
+	$(MAKE) install-libs-arm64
 	$(MAKE) strip-all-arm64 2>/dev/null || true
 	$(MAKE) prune-docs-arm64 2>/dev/null || true
 	$(MAKE) consolidate-bin-arm64
@@ -100,6 +102,61 @@ install-all: install-x86_64 install-arm64
 
 install: install-all
 	@echo "=== All installs complete ==="
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Copy host shared libraries into rootfs
+# ═════════════════════════════════════════════════════════════════════════════
+
+install-libs-x86_64:
+	@echo "=== Installing shared libraries (x86_64) ==="
+	mkdir -p "$(ROOTFS_x86_64)/lib64" "$(ROOTFS_x86_64)/lib"
+	SYSROOT="$(SYSROOT_x86_64)"; \
+	LIBS="libc.so.6 libm.so.6 libpthread.so.0 librt.so.1 \
+	  libdl.so.2 libutil.so.1 libresolv.so.2 libcrypt.so.2 \
+	  libnss_files.so.2 libnss_dns.so.2 \
+	  libncursesw.so.6 libgmp.so.10 libmpfr.so.6"; \
+	if [ -n "$$SYSROOT" ] && [ -d "$$SYSROOT/lib" ]; then \
+	  cp -a "$$SYSROOT/lib64/ld-linux-x86-64.so.2" "$(ROOTFS_x86_64)/lib64/" 2>/dev/null || \
+	    cp -a "$$SYSROOT/lib/ld-linux-x86-64.so.2" "$(ROOTFS_x86_64)/lib64/"; \
+	  for lib in $$LIBS; do \
+	    cp -a "$$SYSROOT/lib64/$$lib" "$(ROOTFS_x86_64)/lib/" 2>/dev/null || \
+	      cp -a "$$SYSROOT/lib/$$lib" "$(ROOTFS_x86_64)/lib/" 2>/dev/null || true; \
+	  done; \
+	else \
+	  cp -a /usr/lib/ld-linux-x86-64.so.2 "$(ROOTFS_x86_64)/lib64/"; \
+	  for lib in $$LIBS; do \
+	    cp -a /usr/lib64/$$lib "$(ROOTFS_x86_64)/lib/" 2>/dev/null || \
+	      cp -a /usr/lib/$$lib "$(ROOTFS_x86_64)/lib/" 2>/dev/null || true; \
+	  done; \
+	fi
+	# ld-linux searches /usr/lib64/, not /lib/ — symlink so it finds our libs
+	ln -sf /lib "$(ROOTFS_x86_64)/usr/lib64" 2>/dev/null || true
+	@echo "=== Shared libraries installed ==="
+
+install-libs-arm64:
+	@echo "=== Installing shared libraries (arm64) ==="
+	mkdir -p "$(ROOTFS_arm64)/lib" "$(ROOTFS_arm64)/lib64"
+	SYSROOT="$(SYSROOT_arm64)"; \
+	LIBS="libc.so.6 libm.so.6 libpthread.so.0 librt.so.1 \
+	  libdl.so.2 libutil.so.1 libresolv.so.2"; \
+	if [ -n "$$SYSROOT" ] && [ -d "$$SYSROOT/lib" ]; then \
+	  cp -a "$$SYSROOT/lib/ld-linux-aarch64.so.1" "$(ROOTFS_arm64)/lib/"; \
+	  ln -sf /lib/ld-linux-aarch64.so.1 "$(ROOTFS_arm64)/lib64/"; \
+	  for lib in $$LIBS; do \
+	    cp -a "$$SYSROOT/lib/$$lib" "$(ROOTFS_arm64)/lib/" 2>/dev/null || true; \
+	  done; \
+	else \
+	  cp -a /usr/lib/ld-linux-aarch64.so.1 "$(ROOTFS_arm64)/lib/" 2>/dev/null || \
+	    cp -a /lib/ld-linux-aarch64.so.1 "$(ROOTFS_arm64)/lib/"; \
+	  ln -sf /lib/ld-linux-aarch64.so.1 "$(ROOTFS_arm64)/lib64/"; \
+	  for lib in $$LIBS; do \
+	    cp -a /usr/lib/$$lib "$(ROOTFS_arm64)/lib/" 2>/dev/null || \
+	      cp -a /usr/lib64/$$lib "$(ROOTFS_arm64)/lib/" 2>/dev/null || true; \
+	  done; \
+	fi
+	# ld-linux on aarch64 may search /usr/lib64/ — symlink so it finds our libs
+	ln -sf /lib "$(ROOTFS_arm64)/usr/lib64" 2>/dev/null || true
+	@echo "=== Shared libraries installed ==="
 
 # ═════════════════════════════════════════════════════════════════════════════
 # Per-target post-install

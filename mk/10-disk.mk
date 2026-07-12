@@ -56,7 +56,7 @@ qemu-x86_64: $(KERNEL_x86_64) $(QEMU_DISK_x86_64)
 	  -append "root=/dev/vda rw console=ttyS0"
 
 qemu-arm64: $(KERNEL_arm64) $(QEMU_DISK_arm64)
-	qemu-system-aarch64 -M virt -m 256 -nographic \
+	qemu-system-aarch64 -M virt -cpu cortex-a57 -m 256 -nographic \
 	  -kernel $(KERNEL_arm64) \
 	  -drive file=$(QEMU_DISK_arm64),format=raw,if=virtio \
 	  -netdev user,id=net0 -device virtio-net,netdev=net0 \
