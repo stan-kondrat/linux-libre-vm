@@ -53,14 +53,14 @@ qemu-x86_64: $(KERNEL_x86_64) $(QEMU_DISK_x86_64)
 	  -kernel $(KERNEL_x86_64) \
 	  -drive file=$(QEMU_DISK_x86_64),format=raw,if=virtio \
 	  -nic user,model=virtio-net-pci \
-	  -append "root=/dev/vda rw console=ttyS0"
+	  -append "root=/dev/vda rw console=ttyS0$(if $(BOOT_DIAG), boot.diag=1)"
 
 qemu-arm64: $(KERNEL_arm64) $(QEMU_DISK_arm64)
 	qemu-system-aarch64 -M virt -cpu cortex-a57 -m 256 -nographic \
 	  -kernel $(KERNEL_arm64) \
 	  -drive file=$(QEMU_DISK_arm64),format=raw,if=virtio \
 	  -nic user,model=virtio-net-pci \
-	  -append "root=/dev/vda rw console=ttyAMA0"
+	  -append "root=/dev/vda rw console=ttyAMA0$(if $(BOOT_DIAG), boot.diag=1)"
 
 ifneq ($(ARCH),)
 disk-image: disk-image-$(ARCH)
@@ -68,27 +68,3 @@ qemu: qemu-$(ARCH)
 else
 qemu: qemu-x86_64
 endif
-
-# ═════════════════════════════════════════════════════════════════════════════
-# Test targets
-# ═════════════════════════════════════════════════════════════════════════════
-
-test-dhcpcd-x86_64:
-	@echo "=== DHCP test (x86_64) ==="
-	timeout 10 $(MAKE) qemu-x86_64 2>&1 || true
-
-test-dhcpcd-arm64:
-	@echo "=== DHCP test (arm64) ==="
-	timeout 10 $(MAKE) qemu-arm64 2>&1 || true
-
-test-dhcpcd: test-dhcpcd-x86_64 test-dhcpcd-arm64
-	@echo "=== DHCP tests complete ==="
-
-test-shutdown-x86_64:
-	@echo "=== Shutdown test (x86_64) ==="
-	timeout 6 $(MAKE) qemu-x86_64 2>&1 || true
-
-test-shutdown-arm64:
-	@echo "=== Shutdown test (arm64) ==="
-	timeout 6 $(MAKE) qemu-arm64 2>&1 || true
-

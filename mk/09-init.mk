@@ -18,9 +18,11 @@ install-init-$(1):
 	mkdir -p "$$$${R}/etc/runit"; \
 	cp "$$$${T}/etc/runit/1" "$$$${T}/etc/runit/2" \
 	   "$$$${T}/etc/runit/3" "$$$${T}/etc/runit/ctrlaltdel" \
+	   "$$$${T}/etc/runit/diag.sh" \
 	   "$$$${R}/etc/runit/"; \
 	chmod 755 "$$$${R}/etc/runit/1" "$$$${R}/etc/runit/2" \
-	         "$$$${R}/etc/runit/3" "$$$${R}/etc/runit/ctrlaltdel"; \
+	         "$$$${R}/etc/runit/3" "$$$${R}/etc/runit/ctrlaltdel" \
+	         "$$$${R}/etc/runit/diag.sh"; \
 	GD="$$$${R}/etc/service/getty-$$$${TTY}"; \
 	mkdir -p "$$$${GD}/log/main"; \
 	sed "s/TTY/$$$${TTY}/g" "$$$${T}/etc/service/getty-TTY/run" > "$$$${GD}/run"; \
