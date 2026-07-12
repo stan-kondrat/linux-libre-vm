@@ -1,0 +1,10 @@
+#!/bin/sh
+# Minimal shutdown — shuts down immediately
+# Usage: shutdown [-h|-r] [time] [message]
+# Since we're minimal, any call triggers poweroff.
+# -r: reboot instead
+
+case "$1" in
+  -r) exec kill -USR1 1 ;;
+  *)  exec kill -TERM 1 ;;
+esac

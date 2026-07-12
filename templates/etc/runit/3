@@ -13,8 +13,8 @@ umount -a -r 2>/dev/null || true
 
 if [ -f /etc/runit/reboot ]; then
   echo "Rebooting..."
-  reboot -f
+  /bin/reboot
 else
   echo "Powering off..."
-  poweroff -f
+  /bin/poweroff
 fi

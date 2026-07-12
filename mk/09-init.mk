@@ -9,11 +9,12 @@ install-init-$(1):
 	@echo "=== Installing init system + /etc skeleton ($(1)) ==="
 	TTY=ttyS0; if [ "$(1)" = "arm64" ]; then TTY=ttyAMA0; fi; \
 	R="$(ROOTFS_$(1))"; T="$(TEMPLATES_DIR)"; \
-	for f in fstab passwd group shadow hostname hosts resolv.conf; do \
+	for f in fstab passwd group shadow hostname hosts resolv.conf ld.so.conf; do \
 	  cp "$$$${T}/etc/$$$${f}" "$$$${R}/etc/$$$${f}"; \
 	done; \
 	chmod 644 "$$$${R}/etc/passwd" "$$$${R}/etc/group"; \
 	chmod 600 "$$$${R}/etc/shadow"; \
+	ldconfig -r "$$$${R}" 2>/dev/null || true; \
 	mkdir -p "$$$${R}/etc/runit"; \
 	cp "$$$${T}/etc/runit/1" "$$$${T}/etc/runit/2" \
 	   "$$$${T}/etc/runit/3" "$$$${T}/etc/runit/ctrlaltdel" \
@@ -27,6 +28,11 @@ install-init-$(1):
 	cp "$$$${T}/etc/service/getty-TTY/log/run" "$$$${GD}/log/run"; \
 	chmod 755 "$$$${GD}/run" "$$$${GD}/finish" "$$$${GD}/log/run"; \
 	ln -sf /bin/bash "$$$${R}/bin/sh" 2>/dev/null || true; \
+	# Create poweroff/reboot/halt/shutdown — not provided by util-linux 2.40+
+	for prog in poweroff reboot halt shutdown; do \
+	  cp "$$$${T}/bin/$$$${prog}" "$$$${R}/bin/$$$${prog}"; \
+	  chmod 755 "$$$${R}/bin/$$$${prog}"; \
+	done; \
 	mkdir -p "$$$${R}/etc/init.d" \
 	         "$$$${R}/root" "$$$${R}/home" "$$$${R}/tmp" \
 	         "$$$${R}/proc" "$$$${R}/sys" "$$$${R}/dev" "$$$${R}/run" \

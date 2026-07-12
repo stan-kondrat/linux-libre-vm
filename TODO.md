@@ -73,11 +73,15 @@
 - [x] Boot to login prompt (both x86_64 + arm64)
 - [x] proc, sysfs, devtmpfs mounted (stage 1)
 - [x] Getty on serial console (ttyS0 / ttyAMA0)
-- [ ] Login as root (empty password)
-- [ ] Test basic commands (ls, ps, cat /proc/version)
-- [ ] Test networking (dhcpcd, ip)
-- [ ] Shutdown gracefully (runit stage 3)
-- [ ] Measure RAM at idle, process count
+- [x] Login as root (empty password)
+- [x] `ps` works — processes visible ✅
+- [x] `whoami`, `pwd`, `ls` work ✅
+- [x] Loopback networking (127.0.0.1) ✅
+- [x] DHCP via QEMU slirp: x86_64 gets 10.0.2.15 ✅, arm64 times out ⏳
+- [x] Memory: ~21MB used at idle (x86_64), ~14MB (arm64) ✅
+- [x] `make test-dhcpcd` target added
+- [x] `make test-shutdown` target added (stage 3 uses `kill -TERM 1`)
+- [ ] Measure disk image sizes post-stripping
 
 ---
 

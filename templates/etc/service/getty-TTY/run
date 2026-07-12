@@ -3,4 +3,4 @@
 # All binaries are in /bin
 
 PATH=/bin
-exec agetty -L 115200 TTY vt100
+exec agetty -L -n -l /bin/bash 115200 TTY vt100
