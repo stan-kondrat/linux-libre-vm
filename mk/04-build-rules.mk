@@ -410,8 +410,8 @@ $$(BUILD_DIR_$(1))/runit/.built: $$(BUILD_DIR_$(1))/runit/.copied
 	@echo "=== runit built ($(1)) ==="
 
 install-runit-$(1): build-runit-$(1)
-	mkdir -p "$$(ROOTFS_$(1))/sbin"
-	for prog in runsv runsvdir runsvchpfd chpst sv; do \
-		[ -f "$$(BUILD_DIR_$(1))/runit/command/$$$$prog" ] && cp "$$(BUILD_DIR_$(1))/runit/command/$$$$prog" "$$(ROOTFS_$(1))/sbin/"; \
+	mkdir -p "$$(ROOTFS_$(1))/bin"
+	for prog in runit runit-init runsv runsvdir runsvchdir chpst sv svlogd utmpset; do \
+		[ -f "$$(BUILD_DIR_$(1))/runit/command/$$$$prog" ] && cp "$$(BUILD_DIR_$(1))/runit/command/$$$$prog" "$$(ROOTFS_$(1))/bin/"; \
 	done
 endef

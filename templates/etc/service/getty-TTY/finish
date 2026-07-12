@@ -1,0 +1,3 @@
+#!/bin/sh
+# If agetty exits, sleep briefly to avoid busy-loop
+exec sleep 5

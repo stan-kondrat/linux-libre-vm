@@ -1,0 +1,7 @@
+#!/bin/sh
+# runit Ctrl+Alt+Del handler
+# All binaries are in /bin
+
+PATH=/bin
+echo "Ctrl+Alt+Del pressed -- shutting down..."
+shutdown -h now

@@ -1,7 +1,7 @@
 # Super Minimal Linux Libre — Build Plan
 
 **Status:** All 15 userland packages build cleanly for both x86_64 and arm64. Phases 1-3 complete.
-**Next:** Phase 4 (Init system + /etc skeleton).
+**Next:** Phase 5 (Strip, minimize, harden).
 
 **Goal:** Build a stripped-down GNU/Linux system using Linux-libre kernel, GNU coreutils, glibc, and GCC — no non-free firmware, minimal attack surface, minimal footprint.
 
@@ -44,7 +44,7 @@ The Makefile is modularized under `mk/`:
 | 1 | Linux-libre kernel | ✅ Complete |
 | 2 | GCC + glibc + binutils toolchain | ✅ Make targets ready |
 | **3** | **Minimal GNU userland** | **✅ 15/15 packages building — all issues fixed** |
-| 4 | Init system + `/etc` skeleton | ⏳ Not started |
+| 4 | Init system + `/etc` skeleton | ✅ Completed |
 | 5 | Strip, minimize, harden | ⏳ Not started |
 | 5.5 | MBR disk image + bootloader | ⏳ Not started |
 | 6 | QEMU verification + packaging | ⏳ Not started |
@@ -54,11 +54,6 @@ The Makefile is modularized under `mk/`:
 
 | # | Package | Build System | x86_64 | arm64 | Notes |
 |---|---------|-------------|--------|-------|-------|
-| 1 | binutils | autotools (out-of-tree) | 🟡 | 🟡 | Cross-toolchain target exists |
-| 2 | linux-headers | kernel headers install | 🟡 | 🟡 | Prepares sysroot for glibc |
-| 3 | gcc stage1 | autotools (out-of-tree) | 🟡 | 🟡 | C only, `--without-headers` |
-| 4 | glibc | autotools (out-of-tree) | 🟡 | 🟡 | Full install to sysroot |
-| 5 | gcc final | autotools (out-of-tree) | 🟡 | 🟡 | C/C++, shared libs |
 | 6 | coreutils | gnulib bootstrap | ✅ | ✅ aarch64 | |
 | 7 | bash | direct configure | ✅ | ✅ aarch64 | |
 | 8 | grep | gnulib bootstrap | ✅ | ✅ aarch64 | |
@@ -79,13 +74,24 @@ The Makefile is modularized under `mk/`:
 
 ---
 
-## Phase 4 — Init System (⏳)
+## Phase 4 — Init System (✅)
 
-- [ ] Create `/etc/runit/` service directories
-- [ ] Create `/etc/fstab`, `/etc/passwd`, `/etc/group`, `/etc/shadow`
-- [ ] Create `/etc/hostname`, `/etc/hosts`, `/etc/resolv.conf`
-- [ ] Create minimal `/dev` entries or use devtmpfs
-- [ ] Configure getty on serial console
+- [x] All binaries consolidated to `/bin` only (no `/usr/bin`, `/usr/sbin`, `/sbin` except `/sbin/init` symlink)
+- [x] `/sbin/init` → `/bin/runit-init` symlink for kernel
+- [x] Fixed runit install: all 9 programs (runit, runit-init, runsv, runsvdir, runsvchdir, chpst, sv, svlogd, utmpset)
+- [x] `/etc/runit/1` — one-time system init (mounts proc, sysfs, devtmpfs, devpts, tmpfs, sets hostname, loopback)
+- [x] `/etc/runit/2` — runsvdir supervisor on `/etc/service/`
+- [x] `/etc/runit/3` — graceful shutdown (stop services, umount, poweroff/reboot)
+- [x] `/etc/runit/ctrlaltdel` — Ctrl+Alt+Del handler
+- [x] `/etc/fstab` — proc, sysfs, devtmpfs, devpts, tmpfs
+- [x] `/etc/passwd` — root + standard system users (all `/bin` shell paths)
+- [x] `/etc/group` — standard groups
+- [x] `/etc/shadow` — empty root password
+- [x] `/etc/hostname` — `linux-libre`
+- [x] `/etc/hosts` — localhost + loopback entries
+- [x] `/etc/resolv.conf` — Cloudflare + Google DNS
+- [x] Getty service on serial console (ttyS0 for x86_64, ttyAMA0 for arm64)
+- [x] devtmpfs for `/dev` (no static device nodes needed)
 
 ---
 

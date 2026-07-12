@@ -1,0 +1,13 @@
+root:x:0:
+bin:x:1:
+daemon:x:2:
+sys:x:3:
+adm:x:4:
+tty:x:5:
+disk:x:6:
+lp:x:7:
+mail:x:12:
+uucp:x:14:
+shadow:x:15:
+utmp:x:22:
+nogroup:x:65534:

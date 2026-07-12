@@ -1,0 +1,31 @@
+#!/bin/sh
+# runit stage 1 — one-time system initialization
+# All binaries are in /bin
+
+PATH=/bin
+
+# Mount kernel filesystems
+mount -t proc proc /proc -o nosuid,noexec,nodev
+mount -t sysfs sysfs /sys -o nosuid,noexec,nodev
+mount -t devtmpfs devtmpfs /dev -o nosuid,noexec,mode=0755
+mount -t tmpfs tmpfs /run -o nosuid,noexec,nodev,mode=0755
+
+# Create /dev subdirectories
+mkdir -p /dev/pts /dev/shm
+mount -t devpts devpts /dev/pts -o nosuid,noexec,gid=5,mode=0620
+mount -t tmpfs tmpfs /dev/shm -o nosuid,noexec,nodev,mode=1777
+
+# Create service directory symlink
+ln -sf /etc/service /service 2>/dev/null || true
+
+# Set hostname
+cat /etc/hostname 2>/dev/null | xargs hostname 2>/dev/null || hostname linux-libre
+
+# Configure loopback
+ip link set lo up 2>/dev/null || true
+
+# Make sure /etc/runit/stopit exists
+touch /etc/runit/stopit
+chmod 0 /etc/runit/stopit
+
+exit 0

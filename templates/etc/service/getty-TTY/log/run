@@ -1,0 +1,6 @@
+#!/bin/sh
+# log service for getty
+# All binaries are in /bin
+
+PATH=/bin
+exec svlogd ./main

@@ -1,0 +1,6 @@
+#!/bin/sh
+# agetty on serial console (TTY)
+# All binaries are in /bin
+
+PATH=/bin
+exec agetty -L 115200 TTY vt100

@@ -79,6 +79,8 @@ install-x86_64: userland-x86_64
 	done
 	$(MAKE) strip-all-x86_64 2>/dev/null || true
 	$(MAKE) prune-docs-x86_64 2>/dev/null || true
+	$(MAKE) consolidate-bin-x86_64
+	$(MAKE) install-init-x86_64
 	@echo "=== Install complete (x86_64) ==="
 
 install-arm64: userland-arm64
@@ -89,6 +91,8 @@ install-arm64: userland-arm64
 	done
 	$(MAKE) strip-all-arm64 2>/dev/null || true
 	$(MAKE) prune-docs-arm64 2>/dev/null || true
+	$(MAKE) consolidate-bin-arm64
+	$(MAKE) install-init-arm64
 	@echo "=== Install complete (arm64) ==="
 
 install-all: install-x86_64 install-arm64
@@ -125,6 +129,19 @@ prune-docs-x86_64:
 	-rm -rf "$(ROOTFS_x86_64)"/usr/share/locale
 	-rm -rf "$(ROOTFS_x86_64)"/tmp/*
 	-rm -rf "$(ROOTFS_x86_64)"/var/cache
+	-rm -rf "$(ROOTFS_x86_64)"/usr/share/applications
+	-rm -rf "$(ROOTFS_x86_64)"/usr/share/icons
+	# Strip vim bloat (keep only syntax/, indent/, ftplugin/, autoload/, colors/, plugin/)
+	-rm -rf "$(ROOTFS_x86_64)"/usr/share/vim/vim92/doc
+	-rm -rf "$(ROOTFS_x86_64)"/usr/share/vim/vim92/tutor
+	-rm -rf "$(ROOTFS_x86_64)"/usr/share/vim/vim92/spell
+	-rm -rf "$(ROOTFS_x86_64)"/usr/share/vim/vim92/print
+	-rm -rf "$(ROOTFS_x86_64)"/usr/share/vim/vim92/macros
+	-rm -rf "$(ROOTFS_x86_64)"/usr/share/vim/vim92/tools
+	-rm -rf "$(ROOTFS_x86_64)"/usr/share/vim/vim92/pack
+	-rm -rf "$(ROOTFS_x86_64)"/usr/share/vim/vim92/colors/lists
+	-rm -rf "$(ROOTFS_x86_64)"/usr/share/vim/vim92/colors/tools
+	-rm -rf "$(ROOTFS_x86_64)"/usr/share/vim/vim92/import
 
 prune-docs-arm64:
 	@echo "=== Pruning docs (arm64) ==="
@@ -134,6 +151,49 @@ prune-docs-arm64:
 	-rm -rf "$(ROOTFS_arm64)"/usr/share/locale
 	-rm -rf "$(ROOTFS_arm64)"/tmp/*
 	-rm -rf "$(ROOTFS_arm64)"/var/cache
+	-rm -rf "$(ROOTFS_arm64)"/usr/share/applications
+	-rm -rf "$(ROOTFS_arm64)"/usr/share/icons
+	# Strip vim bloat (keep only syntax/, indent/, ftplugin/, autoload/, colors/, plugin/)
+	-rm -rf "$(ROOTFS_arm64)"/usr/share/vim/vim92/doc
+	-rm -rf "$(ROOTFS_arm64)"/usr/share/vim/vim92/tutor
+	-rm -rf "$(ROOTFS_arm64)"/usr/share/vim/vim92/spell
+	-rm -rf "$(ROOTFS_arm64)"/usr/share/vim/vim92/print
+	-rm -rf "$(ROOTFS_arm64)"/usr/share/vim/vim92/macros
+	-rm -rf "$(ROOTFS_arm64)"/usr/share/vim/vim92/tools
+	-rm -rf "$(ROOTFS_arm64)"/usr/share/vim/vim92/pack
+	-rm -rf "$(ROOTFS_arm64)"/usr/share/vim/vim92/colors/lists
+	-rm -rf "$(ROOTFS_arm64)"/usr/share/vim/vim92/colors/tools
+	-rm -rf "$(ROOTFS_arm64)"/usr/share/vim/vim92/import
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Binary consolidation — move all binaries to /bin
+# ═════════════════════════════════════════════════════════════════════════════
+
+define CONSOLIDATE_BIN
+consolidate-bin-$(1):
+	@echo "=== Consolidating binaries to /bin ($(1)) ==="
+	# Move /usr/bin/* to /bin/*
+	if [ -d "$(ROOTFS_$(1))/usr/bin" ]; then \
+	  mv "$(ROOTFS_$(1))/usr/bin/"* "$(ROOTFS_$(1))/bin/" 2>/dev/null || true; \
+	  rmdir "$(ROOTFS_$(1))/usr/bin" 2>/dev/null || true; \
+	fi
+	# Move /usr/sbin/* to /bin/*
+	if [ -d "$(ROOTFS_$(1))/usr/sbin" ]; then \
+	  mv "$(ROOTFS_$(1))/usr/sbin/"* "$(ROOTFS_$(1))/bin/" 2>/dev/null || true; \
+	  rmdir "$(ROOTFS_$(1))/usr/sbin" 2>/dev/null || true; \
+	fi
+	# Move /sbin/* to /bin/*
+	if [ -d "$(ROOTFS_$(1))/sbin" ]; then \
+	  mv "$(ROOTFS_$(1))/sbin/"* "$(ROOTFS_$(1))/bin/" 2>/dev/null || true; \
+	  rmdir "$(ROOTFS_$(1))/sbin" 2>/dev/null || true; \
+	fi
+	# Create /sbin/init -> /bin/runit-init symlink (kernel looks for /sbin/init)
+	mkdir -p "$(ROOTFS_$(1))/sbin"
+	ln -sf /bin/runit-init "$(ROOTFS_$(1))/sbin/init"
+	@echo "=== Binaries consolidated ($(1)) ==="
+endef
+
+$(foreach t,$(TARGETS),$(eval $(call CONSOLIDATE_BIN,$(t))))
 
 # ═════════════════════════════════════════════════════════════════════════════
 # ARCH-aware delegation targets (make ARCH=x86_64 build-coreutils, etc.)
