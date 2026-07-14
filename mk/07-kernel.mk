@@ -36,7 +36,7 @@ kernel-x86_64: $(KERNEL_OUT_x86_64)
 
 # linux-libre is copied to BUILD_DIR via COPY_PKG (declared in 06-toolchain.mk).
 # The .copied stamp ensures sources are prepared before building.
-$(KERNEL_OUT_x86_64): $(BUILD_DIR_x86_64)/linux-libre/.copied $(KERNEL_CONFIG_x86_64)
+$(BUILD_DIR_x86_64)/linux-libre/.built: $(BUILD_DIR_x86_64)/linux-libre/.copied $(KERNEL_CONFIG_x86_64)
 	@echo "=== Configuring and building x86_64 kernel ==="
 	cp "$(KERNEL_CONFIG_x86_64)" "$(BUILD_DIR_x86_64)/linux-libre/.config"
 	+$(MAKE) -C "$(BUILD_DIR_x86_64)/linux-libre" \
@@ -45,8 +45,11 @@ $(KERNEL_OUT_x86_64): $(BUILD_DIR_x86_64)/linux-libre/.copied $(KERNEL_CONFIG_x8
 	+$(MAKE) -C "$(BUILD_DIR_x86_64)/linux-libre" \
 	  ARCH=x86_64 CROSS_COMPILE=$(KERNEL_CROSS_x86_64) \
 	  -j$$(nproc) $(KERNEL_TARGET_x86_64)
+	@touch "$@"
 	@echo "=== x86_64 kernel built: $(KERNEL_OUT_x86_64) ==="
-	ls -lh "$(KERNEL_OUT_x86_64)"
+	@ls -lh "$(KERNEL_OUT_x86_64)"
+
+$(KERNEL_OUT_x86_64): $(BUILD_DIR_x86_64)/linux-libre/.built
 
 kernel-reconfig-x86_64:
 	@echo "=== Reconfiguring x86_64 kernel from scratch ==="
@@ -65,7 +68,7 @@ install-kernel-x86_64: kernel-x86_64
 
 kernel-arm64: $(KERNEL_OUT_arm64)
 
-$(KERNEL_OUT_arm64): $(BUILD_DIR_arm64)/linux-libre/.copied $(KERNEL_CONFIG_arm64)
+$(BUILD_DIR_arm64)/linux-libre/.built: $(BUILD_DIR_arm64)/linux-libre/.copied $(KERNEL_CONFIG_arm64)
 	@echo "=== Configuring and building arm64 kernel ==="
 	cp "$(KERNEL_CONFIG_arm64)" "$(BUILD_DIR_arm64)/linux-libre/.config"
 	+$(MAKE) -C "$(BUILD_DIR_arm64)/linux-libre" \
@@ -74,8 +77,11 @@ $(KERNEL_OUT_arm64): $(BUILD_DIR_arm64)/linux-libre/.copied $(KERNEL_CONFIG_arm6
 	+$(MAKE) -C "$(BUILD_DIR_arm64)/linux-libre" \
 	  ARCH=arm64 CROSS_COMPILE=$(KERNEL_CROSS_arm64) \
 	  -j$$(nproc) $(KERNEL_TARGET_arm64)
+	@touch "$@"
 	@echo "=== arm64 kernel built: $(KERNEL_OUT_arm64) ==="
-	ls -lh "$(KERNEL_OUT_arm64)"
+	@ls -lh "$(KERNEL_OUT_arm64)"
+
+$(KERNEL_OUT_arm64): $(BUILD_DIR_arm64)/linux-libre/.built
 
 kernel-reconfig-arm64:
 	@echo "=== Reconfiguring arm64 kernel from scratch ==="

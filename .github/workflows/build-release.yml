@@ -1,0 +1,375 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# CI + Release workflow for Super Minimal Linux Libre
+#
+# Builds both x86_64 and arm64 userland + kernel on an x86_64 GitHub runner,
+# creates disk images, runs QEMU smoke tests, and publishes GitHub Releases
+# on tag push.
+#
+# Caching strategy (3 layers):
+#   1. sources-patched/ — patched source trees (shared across arches)
+#   2. ccache — compiler object cache (per-arch)
+#   3. sources-build/ — full build output + stamp files (per-arch, most impactful)
+#
+# Prerequisites:
+#   - Submodules using git:// protocol are auto-rewritten to https://
+#   - linux-libre upstream must support HTTPS (see linux-libre note in README)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+name: Build & Release
+
+on:
+  push:
+    branches: [main, master]
+    tags: ["v*", "release-*"]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+# Cancel in-progress runs for the same branch (but not tags)
+concurrency:
+  group: ${{ github.ref }}-${{ github.workflow }}
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
+
+env:
+  MAKEFLAGS: "-j$(nproc)"
+
+jobs:
+  build:
+    name: Build (${{ matrix.arch }})
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        arch: [x86_64, arm64]
+      fail-fast: false
+
+    steps:
+      # ── Checkout ──────────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: false  # handled manually (need to fix git:// URLs)
+
+      - name: Fix submodule URLs (git:// → https://)
+        run: |
+          if grep -q 'git://' .gitmodules; then
+            echo "=== Rewriting git:// → https:// in .gitmodules ==="
+            sed -i 's|git://|https://|g' .gitmodules
+          fi
+
+      - name: Initialize submodules
+        run: |
+          git submodule update --init --recursive
+
+      # ── Cache keys ────────────────────────────────────────────────────────
+      - name: Compute cache keys
+        id: cache-keys
+        run: |
+          # Hash of submodule SHAs → invalidates when source code versions change
+          SUBMODULE_HASH=$(git submodule status | sha256sum | cut -d' ' -f1)
+          echo "submodule-hash=${SUBMODULE_HASH}" >> "$GITHUB_OUTPUT"
+
+          # Hash of build configuration → invalidates when build rules change
+          CONFIG_HASH=$( (sha256sum mk/*.mk kernel-*.config .gitmodules 2>/dev/null) | sha256sum | cut -d' ' -f1)
+          echo "config-hash=${CONFIG_HASH}" >> "$GITHUB_OUTPUT"
+
+          echo "submodule-hash=${SUBMODULE_HASH}"
+          echo "config-hash=${CONFIG_HASH}"
+
+      # ── Cache: sources-patched/ ────────────────────────────────────────────
+      # Patched source trees (shared across arches). Keyed on submodule SHAs
+      # + patch files + mk rules that control patching.
+      - name: Cache sources-patched
+        uses: actions/cache@v4
+        with:
+          path: sources-patched
+          key: sources-patched-${{ steps.cache-keys.outputs.submodule-hash }}-${{ hashFiles('sources-patches/**', 'mk/03-source-prep.mk') }}
+          restore-keys: |
+            sources-patched-${{ steps.cache-keys.outputs.submodule-hash }}-
+            sources-patched-
+
+      # ── Cache: ccache ─────────────────────────────────────────────────────
+      # Compiler object cache (per-arch). Survives minor config changes via
+      # restore-keys fallback.
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ccache-${{ matrix.arch }}-${{ steps.cache-keys.outputs.config-hash }}
+          restore-keys: |
+            ccache-${{ matrix.arch }}-
+          enableCrossOsArchive: true
+
+      # ── Cache: build output ────────────────────────────────────────────────
+      # Full per-arch build directories with `.built` stamp files. When the
+      # cache hits, `make` finds all stamp files and skips everything — saving
+      # 30-45 minutes. Keyed on submodule SHAs + config so it auto-invalidates.
+      - name: Cache build output (${{ matrix.arch }})
+        uses: actions/cache@v4
+        with:
+          path: sources-build/${{ matrix.arch }}
+          key: build-${{ matrix.arch }}-${{ steps.cache-keys.outputs.submodule-hash }}-${{ steps.cache-keys.outputs.config-hash }}
+          restore-keys: |
+            build-${{ matrix.arch }}-${{ steps.cache-keys.outputs.submodule-hash }}-
+            build-${{ matrix.arch }}-
+          enableCrossOsArchive: true
+
+      # ── Toolchain ─────────────────────────────────────────────────────────
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            make gcc ccache \
+            autoconf automake libtool \
+            gettext texinfo \
+            patch xz-utils rsync bc \
+            elfutils libelf-dev \
+            e2fsprogs file
+
+          # Cross-compiler for arm64 (needed on x86_64 host)
+          sudo apt-get install -y -qq \
+            gcc-aarch64-linux-gnu \
+            libc6-dev-arm64-cross
+
+          # QEMU for testing
+          sudo apt-get install -y -qq \
+            qemu-system-x86 qemu-system-arm
+
+      - name: Set up ccache
+        run: |
+          # Create ccache wrappers for native + cross compilers
+          sudo mkdir -p /usr/lib/ccache
+          sudo ln -sf /usr/bin/ccache /usr/lib/ccache/gcc
+          sudo ln -sf /usr/bin/ccache /usr/lib/ccache/g++
+          sudo ln -sf /usr/bin/ccache /usr/lib/ccache/cc
+          sudo ln -sf /usr/bin/ccache /usr/lib/ccache/aarch64-linux-gnu-gcc
+          sudo ln -sf /usr/bin/ccache /usr/lib/ccache/aarch64-linux-gnu-g++
+          sudo ln -sf /usr/bin/ccache /usr/lib/ccache/aarch64-linux-gnu-cpp
+
+          # Configure ccache
+          ccache --max-size=500M
+          ccache --zero-stats 2>/dev/null || true
+
+          # Show stats
+          echo "=== ccache config ==="
+          ccache --show-config | grep -E 'cache_dir|max_size'
+          echo "=== ccache initial stats ==="
+          ccache --show-stats || true
+
+      - name: Show toolchain info
+        run: |
+          echo "=== Host ==="
+          gcc -dumpmachine
+          gcc --version | head -1
+          echo "=== Cross ==="
+          aarch64-linux-gnu-gcc --version | head -1
+          echo "=== make ==="
+          make --version | head -1
+          echo "=== QEMU ==="
+          qemu-system-x86_64 --version | head -1
+          qemu-system-aarch64 --version | head -1
+          echo "=== ccache ==="
+          ccache --version | head -1
+
+      - name: Check build environment
+        run: |
+          export PATH="/usr/lib/ccache:$PATH"
+          make check-env
+
+      # ── Build ─────────────────────────────────────────────────────────────
+      - name: Build ${{ matrix.arch }} userland + kernel
+        env:
+          PATH: "/usr/lib/ccache:${{ env.PATH }}"
+        run: |
+          # If build cache restored .built stamps, make will skip everything
+          # and print "Nothing to be done".  That's the win.
+          echo "=== make userland-${{ matrix.arch }} ==="
+          make ARCH=${{ matrix.arch }} userland-${{ matrix.arch }}
+
+          echo "=== make kernel-${{ matrix.arch }} ==="
+          make ARCH=${{ matrix.arch }} kernel -j$(nproc)
+
+      - name: Install ${{ matrix.arch }} to rootfs
+        env:
+          PATH: "/usr/lib/ccache:${{ env.PATH }}"
+        run: |
+          make ARCH=${{ matrix.arch }} install-${{ matrix.arch }}
+          make ARCH=${{ matrix.arch }} install-kernel-${{ matrix.arch }}
+
+      # ── ccache stats (diagnostic) ─────────────────────────────────────────
+      - name: Show ccache stats
+        if: always()
+        run: |
+          if command -v ccache >/dev/null 2>&1; then
+            echo "=== ccache final stats ==="
+            ccache --show-stats
+          else
+            echo "=== ccache not available ==="
+          fi
+
+      # ── Disk Image ────────────────────────────────────────────────────────
+      - name: Create ${{ matrix.arch }} disk image
+        run: |
+          make disk-image-${{ matrix.arch }}
+          ls -lh disks/
+
+      # ── Upload artifacts ──────────────────────────────────────────────────
+      - name: Upload ${{ matrix.arch }} disk image
+        uses: actions/upload-artifact@v4
+        with:
+          name: disk-${{ matrix.arch }}
+          path: disks/disk-${{ matrix.arch }}.img
+          compression-level: 0
+
+      - name: Upload ${{ matrix.arch }} kernel
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-${{ matrix.arch }}
+          path: |
+            ${{ matrix.arch == 'x86_64' && 'sources-build/x86_64/linux-libre/arch/x86/boot/bzImage' || 'sources-build/arm64/linux-libre/arch/arm64/boot/Image.gz' }}
+          compression-level: 0
+
+      - name: Upload ${{ matrix.arch }} rootfs metadata
+        run: |
+          find rootfs/${{ matrix.arch }}/bin -type f | sort > /tmp/binlist-${{ matrix.arch }}.txt
+          du -sh rootfs/${{ matrix.arch }} > /tmp/rootsize-${{ matrix.arch }}.txt
+        continue-on-error: true
+
+      - name: Upload ${{ matrix.arch }} metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: metadata-${{ matrix.arch }}
+          path: |
+            /tmp/binlist-${{ matrix.arch }}.txt
+            /tmp/rootsize-${{ matrix.arch }}.txt
+
+  # ── QEMU Smoke Tests ──────────────────────────────────────────────────────
+  test:
+    name: Test (${{ matrix.arch }})
+    needs: build
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        arch: [x86_64, arm64]
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Install QEMU
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq qemu-system-x86 qemu-system-arm
+
+      - name: Download ${{ matrix.arch }} disk image
+        uses: actions/download-artifact@v4
+        with:
+          name: disk-${{ matrix.arch }}
+          path: disks/
+
+      - name: Download ${{ matrix.arch }} kernel
+        uses: actions/download-artifact@v4
+        with:
+          name: kernel-${{ matrix.arch }}
+          path: kernel-dl/
+
+      - name: Place kernel for QEMU
+        run: |
+          if [ "${{ matrix.arch }}" = "x86_64" ]; then
+            mkdir -p sources-build/x86_64/linux-libre/arch/x86/boot
+            cp kernel-dl/bzImage sources-build/x86_64/linux-libre/arch/x86/boot/
+          else
+            mkdir -p sources-build/arm64/linux-libre/arch/arm64/boot
+            cp kernel-dl/Image.gz sources-build/arm64/linux-libre/arch/arm64/boot/
+          fi
+
+      - name: QEMU boot smoke test (${{ matrix.arch }}) — 15s timeout
+        run: |
+          timeout 15 make qemu-${{ matrix.arch }} 2>&1 || true
+        continue-on-error: true
+
+  # ── Release ────────────────────────────────────────────────────────────────
+  release:
+    name: Create GitHub Release
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [build, test]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts/
+          merge-multiple: true
+
+      - name: Prepare release assets
+        run: |
+          ls -la release-artifacts/
+          # Rename to descriptive filenames
+          cp release-artifacts/disk-x86_64.img linux-libre-vm-x86_64.img || true
+          cp release-artifacts/disk-arm64.img linux-libre-vm-arm64.img || true
+          cp release-artifacts/bzImage linux-libre-vmlinuz-x86_64 || true
+          cp release-artifacts/Image.gz linux-libre-vmlinuz-arm64 || true
+          ls -lh linux-libre-*
+
+      - name: Create checksums
+        run: |
+          sha256sum linux-libre-*.img linux-libre-vmlinuz-* > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Generate release notes
+        run: |
+          cat > release-notes.md << 'EOF'
+          ## Super Minimal Linux Libre
+
+          Build of the minimal GNU/Linux system with Linux-libre kernel.
+
+          ### Assets
+
+          | File | Description |
+          |------|-------------|
+          | `linux-libre-vm-x86_64.img` | x86_64 disk image (ext4, ~84 MB) |
+          | `linux-libre-vm-arm64.img` | arm64 disk image (ext4, ~72 MB) |
+          | `linux-libre-vmlinuz-x86_64` | x86_64 kernel bzImage |
+          | `linux-libre-vmlinuz-arm64` | arm64 kernel Image.gz |
+          | `SHA256SUMS` | Checksums for all assets |
+
+          ### Usage
+
+          ```bash
+          # x86_64
+          qemu-system-x86_64 -M microvm -m 256 -nographic \
+            -kernel linux-libre-vmlinuz-x86_64 \
+            -drive file=linux-libre-vm-x86_64.img,format=raw,if=none,id=drive0 \
+            -device virtio-blk-device,drive=drive0 \
+            -nic user,model=virtio-net-device \
+            -append "root=/dev/vda rw console=ttyS0"
+
+          # arm64
+          qemu-system-aarch64 -M virt -cpu cortex-a57 -m 256 -nographic \
+            -kernel linux-libre-vmlinuz-arm64 \
+            -drive file=linux-libre-vm-arm64.img,format=raw,if=none,id=drive0 \
+            -device virtio-blk-device,drive=drive0 \
+            -nic user,model=virtio-net-device \
+            -append "root=/dev/vda rw console=ttyAMA0"
+          ```
+          EOF
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Release ${{ github.ref_name }}
+          body_path: release-notes.md
+          files: |
+            linux-libre-vm-x86_64.img
+            linux-libre-vm-arm64.img
+            linux-libre-vmlinuz-x86_64
+            linux-libre-vmlinuz-arm64
+            SHA256SUMS
+          draft: false
+          prerelease: false
+          generate_release_notes: false

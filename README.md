@@ -4,7 +4,7 @@ Build a stripped-down GNU/Linux system from scratch using Linux-libre kernel, GN
 
 **Status:** Both x86_64 and arm64 boot to shell with DHCP networking ✅
 
-**Target:** x86_64 (amd64), arm64 (aarch64) on QEMU/KVM with virtio drivers only.
+**Target:** x86_64 (amd64, QEMU q35 + virtio-pci), arm64 (aarch64, QEMU virt + virtio-pci).
 
 **Build host:** x86_64 or aarch64 Linux — auto-detected
 
@@ -23,7 +23,8 @@ git submodule update --init --recursive
 make build              # all userland + kernel, both arches
 make install            # install to rootfs/
 make disk-image         # create ext4 images (no root needed)
-make qemu-x86_64        # boot in QEMU (Ctrl-C to exit)
+make qemu-x86_64        # boot x86_64 in QEMU (Ctrl-C to exit)
+make qemu-arm64         # boot arm64 in QEMU (Ctrl-C to exit)
 ```
 
 ---
@@ -93,7 +94,7 @@ linux-libre-vm/
 │   └── disk-arm64.img           arm64 disk image (72M)
 ├── build-logs/                   per-target build logs (gitignored)
 │
-├── kernel-x86_64.config         x86_64 kernel config (super minimal)
+├── kernel-x86_64.config         x86_64 kernel config (super minimal, PCI)
 ├── kernel-arm64.config          arm64 kernel config (super minimal)
 │
 ├── templates/                    init system template files (tracked in git)
@@ -155,8 +156,8 @@ make disk-image                    # both arches
 make disk-image-x86_64
 
 # QEMU boot
-make qemu-x86_64                   # boots to bash shell
-make qemu-arm64                    # boots to bash shell
+make qemu-x86_64                   # boots to bash shell (QEMU q35 + virtio-pci)
+make qemu-arm64                    # boots to bash shell (QEMU virt + virtio-pci)
 
 # Tests
 make test-dhcpcd-x86_64            # DHCP test (10s timeout)
@@ -245,7 +246,7 @@ Shell: bash-5.3#
 
 | Metric | Target | Current |
 |--------|--------|---------|
-| Kernel image | < 3 MB | x86_64: 4.1M, arm64: 2.9M |
+| Kernel image | < 3 MB | x86_64: 3.3M, arm64: 2.9M |
 | Rootfs (uncompressed) | < 50 MB | x86_64: 67M, arm64: 62M |
 | RAM at idle | < 64 MB | x86_64: ~21M, arm64: ~14M ✅ |
 | Running processes | < 15 | x86_64: 34, arm64: 36 |
@@ -255,10 +256,12 @@ Shell: bash-5.3#
 
 ## Architecture
 
-- Kernel: Linux-libre → directly booted by QEMU (`-kernel bzImage`)
+- Kernel: Linux-libre → directly booted by QEMU (`-kernel bzImage` / `-kernel Image.gz`)
+- x86_64 machine: QEMU q35 with virtio-pci (block + network), no ACPI
+- arm64 machine: QEMU virt with virtio-mmio (block) + virtio-pci (network)
 - Init: runit (statically linked) → PID 1
 - Services: getty on serial console (ttyS0 / ttyAMA0)
 - Rootfs: ext4 image, created via `mke2fs -d` (no loop devices, no root)
 - Boot: QEMU + kernel + raw disk image, no bootloader needed
-- Networking: QEMU slirp user-mode with virtio-net-pci, dhcpcd
+- Networking: QEMU slirp user-mode, dhcpcd
 - Library path: `/usr/lib64 → /lib` for ld-linux compatibility

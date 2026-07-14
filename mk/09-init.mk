@@ -30,7 +30,6 @@ install-init-$(1):
 	cp "$$$${T}/etc/service/getty-TTY/log/run" "$$$${GD}/log/run"; \
 	chmod 755 "$$$${GD}/run" "$$$${GD}/finish" "$$$${GD}/log/run"; \
 	ln -sf /bin/bash "$$$${R}/bin/sh" 2>/dev/null || true; \
-	# Create poweroff/reboot/halt/shutdown — not provided by util-linux 2.40+
 	for prog in poweroff reboot halt shutdown; do \
 	  cp "$$$${T}/bin/$$$${prog}" "$$$${R}/bin/$$$${prog}"; \
 	  chmod 755 "$$$${R}/bin/$$$${prog}"; \
