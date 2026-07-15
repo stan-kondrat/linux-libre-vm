@@ -11,8 +11,9 @@
 #   3. sources-build/ — full build output + stamp files (per-arch, most impactful)
 #
 # Prerequisites:
-#   - Submodules using git:// protocol are auto-rewritten to https://
-#   - linux-libre upstream must support HTTPS (see linux-libre note in README)
+#   - Most submodules use HTTPS; linux-libre uses git:// (FSFLA limitation)
+#   - GitHub Actions runners support git:// protocol on port 9418
+#   - If linux-libre fetch fails, mirror it to GitHub and update .gitmodules
 # ═══════════════════════════════════════════════════════════════════════════════
 
 name: Build & Release
@@ -44,21 +45,12 @@ jobs:
 
     steps:
       # ── Checkout ──────────────────────────────────────────────────────────
+      # linux-libre uses git:// protocol (FSFLA doesn't serve HTTPS).
+      # GitHub Actions runners support git:// on port 9418.
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          submodules: false  # handled manually (need to fix git:// URLs)
-
-      - name: Fix submodule URLs (git:// → https://)
-        run: |
-          if grep -q 'git://' .gitmodules; then
-            echo "=== Rewriting git:// → https:// in .gitmodules ==="
-            sed -i 's|git://|https://|g' .gitmodules
-          fi
-
-      - name: Initialize submodules
-        run: |
-          git submodule update --init --recursive
+          submodules: recursive
 
       # ── Cache keys ────────────────────────────────────────────────────────
       - name: Compute cache keys

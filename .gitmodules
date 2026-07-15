@@ -51,10 +51,10 @@
 	url = git://linux-libre.fsfla.org/releases.git
 [submodule "sources/binutils"]
 	path = sources/binutils
-	url = git://sourceware.org/git/binutils-gdb.git
+	url = https://sourceware.org/git/binutils-gdb.git
 [submodule "sources/gcc"]
 	path = sources/gcc
 	url = https://gcc.gnu.org/git/gcc.git
 [submodule "sources/gnulib"]
 	path = sources/gnulib
-	url = git://git.sv.gnu.org/gnulib.git
+	url = https://git.savannah.gnu.org/git/gnulib.git
