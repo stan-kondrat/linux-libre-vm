@@ -46,11 +46,24 @@ jobs:
     steps:
       # ── Checkout ──────────────────────────────────────────────────────────
       # linux-libre uses git:// protocol (FSFLA doesn't serve HTTPS).
-      # GitHub Actions runners support git:// on port 9418.
+      # actions/checkout@v4 struggles with git:// submodules on runners,
+      # so we init them manually after checkout.
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          submodules: recursive
+          submodules: false
+
+      - name: Initialize submodules
+        run: |
+          # Clone all submodules except linux-libre (which uses git://)
+          # If the runner blocks git://, linux-libre will fail and we handle it
+          git submodule update --init --recursive 2>&1 || {
+            echo "::warning::git:// protocol may be blocked on this runner"
+            echo "::warning::If 'sources/linux-libre' failed to clone, you can:"
+            echo "::warning::  1. Mirror it to GitHub and update .gitmodules"
+            echo "::warning::  2. Or use a self-hosted runner with port 9418 open"
+            exit 1
+          }
 
       # ── Cache keys ────────────────────────────────────────────────────────
       - name: Compute cache keys
