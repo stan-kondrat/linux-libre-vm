@@ -39,6 +39,12 @@ $$(BUILD_DIR_$(2))/$(1)/.built: $$(BUILD_DIR_$(2))/$(1)/.copied
 	  bison -y -p zz -o "$$(BUILD_DIR_$(2))/$(1)/command.c" "$$(BUILD_DIR_$(2))/$(1)/command.y" 2>/dev/null; \
 	  touch "$$(BUILD_DIR_$(2))/$(1)/command.c"; \
 	fi
+	# Gawk fix: use the awklib/eg sources shipped in git. If a checkout leaves
+	# doc/gawk.texi newer than awklib/stamp-eg, make wipes eg/ and re-extracts
+	# it with the host gawk, which loses pwcat.c/grcat.c on CI runners
+	if [ "$(1)" = "gawk" ] && [ -f "$$(SOURCES_PATCHED_DIR)/$(1)/awklib/stamp-eg" ]; then \
+	  touch "$$(SOURCES_PATCHED_DIR)/$(1)/awklib/stamp-eg"; \
+	fi
 	# Cross-compilation: stub help2man (cross binaries can't run on host)
 	if [ -n "$(CROSS_$(2))" ] && [ -f "$$(BUILD_DIR_$(2))/$(1)/man/help2man" ]; then \
 	  printf '#!/bin/sh\nfor f; do :; done\n' > "$$(BUILD_DIR_$(2))/$(1)/man/help2man"; \

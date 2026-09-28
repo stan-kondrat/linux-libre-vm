@@ -3,17 +3,17 @@
 # UTM runner — create and drive a direct-kernel-boot arm64 VM in UTM
 #
 # Uses only tools shipped with macOS + UTM: osascript (UTM AppleScript API),
-# utmctl (bundled in UTM.app), screen and python3 (serial console). No
+# utmctl (bundled in UTM.app) and python3 (serial console). No
 # Homebrew, no standalone QEMU. See docs/utm.md.
 #
 # The VM uses UTM's QEMU backend with the Hypervisor.framework (hvf), no UEFI,
 # no display. Devices are virtio-mmio (virtio-blk-device / virtio-net-device)
 # because the linux-libre arm64 kernel is built without PCI.
 #
-# Usage: utm/utm-vm.sh <command> [args]
+# Usage: vm/utm.sh <command> [args]
 #   create | recreate      create the VM from the environment below
 #   start | stop | status  control it (utmctl)
-#   console                interactive serial console (screen; quit: Ctrl-a k)
+#   console                interactive serial console (Ctrl-] quits)
 #   exec [CMD ...]         log in as root on the serial console, run CMDs
 #   serial-path            host pseudo-TTY of the serial console
 #   delete                 stop and delete the VM
@@ -165,12 +165,12 @@ case $cmd in
 create)      cmd_create ;;
 recreate)    cmd_delete; cmd_create ;;
 start)       "$UTMCTL" start --hide "$NAME" ;;
-console)     # 'utmctl attach' only prints the pty path in UTM 5.0.x; use screen
-             # (ships with macOS). Detach: Ctrl-a d, quit: Ctrl-a k
+console)     # 'utmctl attach' only prints the pty path in UTM 5.0.x
              tty=$(cmd_serial_path)
              [ -e "$tty" ] || die "no serial console (is the VM running?)"
-             exec screen "$tty" 115200 ;;
-exec)        exec python3 "$HERE/serial-exec.py" "$(cmd_serial_path)" \
+             exec python3 "$HERE/serial-exec.py" "$tty" --interactive ;;
+exec)        tty=$(cmd_serial_path) || exit 1
+             exec python3 "$HERE/serial-exec.py" "$tty" \
                --login root --timeout "$TIMEOUT" "$@" ;;
 serial-path) cmd_serial_path ;;
 status)      "$UTMCTL" status "$NAME" ;;

@@ -48,21 +48,18 @@ KERNEL_arm64  := $(BUILD_DIR_arm64)/linux-libre/arch/arm64/boot/Image.gz
 QEMU_DISK_x86_64 := $(DISK_DIR)/disk-x86_64.img
 QEMU_DISK_arm64  := $(DISK_DIR)/disk-arm64.img
 
+# Foreground boot, console on this terminal (quit: Ctrl-a x). Devices and
+# acceleration come from vm/qemu.sh (docs/qemu.md); BOOT_DIAG=1 adds boot.diag=1
+QEMU_APPEND_x86_64 := root=/dev/vda rw console=ttyS0$(if $(BOOT_DIAG), boot.diag=1)
+QEMU_APPEND_arm64  := root=/dev/vda rw console=ttyAMA0$(if $(BOOT_DIAG), boot.diag=1)
+
+QEMU_RUN = ARCH=$(1) KERNEL="$(KERNEL_$(1))" DISK="$(QEMU_DISK_$(1))" APPEND="$(QEMU_APPEND_$(1))" vm/qemu.sh run
+
 qemu-x86_64: $(KERNEL_x86_64) $(QEMU_DISK_x86_64)
-	qemu-system-x86_64 -M q35 -m 256 -nographic \
-	  -kernel $(KERNEL_x86_64) \
-	  -drive file=$(QEMU_DISK_x86_64),format=raw,if=none,id=drive0 \
-	  -device virtio-blk-pci,drive=drive0 \
-	  -nic user,model=virtio-net-pci \
-	  -append "root=/dev/vda rw console=ttyS0$(if $(BOOT_DIAG), boot.diag=1)"
+	$(call QEMU_RUN,x86_64)
 
 qemu-arm64: $(KERNEL_arm64) $(QEMU_DISK_arm64)
-	qemu-system-aarch64 -M virt -cpu cortex-a57 -m 256 -nographic \
-	  -kernel $(KERNEL_arm64) \
-	  -drive file=$(QEMU_DISK_arm64),format=raw,if=none,id=drive0 \
-	  -device virtio-blk-device,drive=drive0 \
-	  -nic user,model=virtio-net-pci \
-	  -append "root=/dev/vda rw console=ttyAMA0$(if $(BOOT_DIAG), boot.diag=1)"
+	$(call QEMU_RUN,arm64)
 
 ifneq ($(ARCH),)
 disk-image: disk-image-$(ARCH)

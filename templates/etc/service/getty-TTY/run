@@ -1,6 +1,11 @@
 #!/bin/sh
-# agetty on serial console (TTY)
+# agetty on serial console (TTY), logs straight into a root bash
 # All binaries are in /bin
+#
+# setsid -c: runsv already leads this session, so agetty could not make TTY
+# its controlling terminal and bash ran without job control. Start a new
+# session with TTY (stdin) as controlling terminal; setsid execs in place, so
+# runsv still supervises agetty.
 
 PATH=/bin
-exec agetty -L -n -l /bin/bash 115200 TTY vt100
+exec setsid -c agetty -L -n -l /bin/bash 115200 TTY vt100 </dev/TTY

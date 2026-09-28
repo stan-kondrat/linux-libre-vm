@@ -29,6 +29,11 @@ install-init-$(1):
 	sed "s/TTY/$$$${TTY}/g" "$$$${T}/etc/service/getty-TTY/finish" > "$$$${GD}/finish"; \
 	cp "$$$${T}/etc/service/getty-TTY/log/run" "$$$${GD}/log/run"; \
 	chmod 755 "$$$${GD}/run" "$$$${GD}/finish" "$$$${GD}/log/run"; \
+	DD="$$$${R}/etc/service/dhcpcd"; \
+	mkdir -p "$$$${DD}/log/main"; \
+	cp "$$$${T}/etc/service/dhcpcd/run" "$$$${DD}/run"; \
+	cp "$$$${T}/etc/service/dhcpcd/log/run" "$$$${DD}/log/run"; \
+	chmod 755 "$$$${DD}/run" "$$$${DD}/log/run"; \
 	ln -sf /bin/bash "$$$${R}/bin/sh" 2>/dev/null || true; \
 	for prog in poweroff reboot halt shutdown; do \
 	  cp "$$$${T}/bin/$$$${prog}" "$$$${R}/bin/$$$${prog}"; \

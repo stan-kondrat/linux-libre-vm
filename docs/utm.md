@@ -8,10 +8,11 @@ tools that ship with macOS and UTM — no Homebrew, no standalone QEMU:
 |------|---------------------|----------|
 | `osascript` | macOS | UTM AppleScript API: create and configure the VM |
 | `utmctl` | `/Applications/UTM.app/Contents/MacOS/utmctl` | start / stop / status / delete |
-| `screen` | macOS | interactive serial console (`utmctl attach` is not implemented in UTM 5.0.x) |
-| `python3` | macOS (Xcode Command Line Tools) | scripted serial console (`utm/serial-exec.py`) |
+| `python3` | macOS (Xcode Command Line Tools) | serial console, interactive and scripted (`vm/serial-exec.py`) |
 
 x86_64 images can only be emulated on Apple Silicon (slow); this runner is arm64 only.
+To run with plain QEMU instead (on Linux, or inside a Linux build VM), see
+[qemu.md](qemu.md): same commands, `make qemu-*` instead of `make utm-*`.
 
 ## What the build produces
 
@@ -34,7 +35,7 @@ Requirements: UTM 5.x in `/Applications` (tested with 5.0.4 and 5.0.6). The firs
 make utm-test-alpine   # optional: check the runner works on this Mac
 make utm-create        # uses the local build output by default
 make utm-start
-make utm-console       # serial console (screen): quit Ctrl-a k, detach Ctrl-a d
+make utm-console       # serial console; Ctrl-] quits (the VM keeps running)
 make utm-delete
 ```
 
@@ -49,12 +50,12 @@ are usable.
 
 ### Script interface
 
-`make utm-*` wraps `utm/utm-vm.sh`, which can also be used directly:
+`make utm-*` wraps `vm/utm.sh`, which can also be used directly:
 
 ```bash
-NAME=my-vm KERNEL=Image.gz DISK=disk-arm64.img utm/utm-vm.sh create
-NAME=my-vm utm/utm-vm.sh start
-NAME=my-vm utm/utm-vm.sh exec 'uname -a' 'df -h'   # log in as root, run, print
+NAME=my-vm KERNEL=Image.gz DISK=disk-arm64.img vm/utm.sh create
+NAME=my-vm vm/utm.sh start
+NAME=my-vm vm/utm.sh exec 'uname -a' 'df -h'   # log in as root, run, print
 ```
 
 | Variable | Default | Meaning |
@@ -67,6 +68,10 @@ NAME=my-vm utm/utm-vm.sh exec 'uname -a' 'df -h'   # log in as root, run, print
 | `MEM` / `CPUS` | `256` / `1` | RAM (MiB) / cores (the kernel is built without SMP) |
 | `NET` | `shared` | UTM network mode: `shared`, `emulated`, `host`, `none` |
 | `TIMEOUT` | `60` | seconds `exec` waits for boot + commands |
+
+**In the guest**, the serial console opens straight into a root bash (no
+password), and the `dhcpcd` runit service configures `eth0` by DHCP from UTM's
+shared network at boot.
 
 **The disk is a copy.** UTM imports `DISK` into the VM bundle (as qcow2).
 After rebuilding the image, run `make utm-recreate` to pick it up; changes
@@ -100,13 +105,13 @@ Found while building the runner with UTM 5.0.4, still true in 5.0.6:
 | A file given with `-drive` in additional arguments is not writable (`Operation not permitted`) | The disk is imported as a UTM drive instead |
 | The bare word `none` means directory share mode `none` | Drive interface "none" is written as `«constant QeDiQdIN»` |
 | Drive IDs appear as `drive<ID>` on the QEMU command line | Our `virtio-blk-device` refers to the imported disk that way |
-| `utmctl attach` prints "attach command is not implemented yet!" and the pty path | `utm-console` opens the pty with `screen` instead |
+| `utmctl attach` prints "attach command is not implemented yet!" and the pty path | `utm-console` opens the pty with `vm/serial-exec.py --interactive` instead |
 
 ## Alpine smoke test
 
-`make utm-test-alpine` (`utm/alpine-test.sh`) checks the runner without our
+`make utm-test-alpine` (`vm/alpine-test.sh`) checks the runner without our
 build. It uses Alpine Linux 3.24.2 netboot files for aarch64: `vmlinuz-virt`
-and `initramfs-virt`, about 20 MB, downloaded to `utm/cache/` and pinned by
+and `initramfs-virt`, about 20 MB, downloaded to `vm/cache/` and pinned by
 SHA-256. The VM shape matches ours, except that Alpine needs its initramfs to
 load drivers. The test:
 
@@ -129,7 +134,7 @@ at boot, so the Mac needs internet access.
   ps -ww -o command= -p "$(pgrep -f QEMULauncher.app/Contents/MacOS/QEMULauncher)" | sed 's/ -\([a-zA-Z]\)/\n-\1/g'
   ```
 - **`make utm-console` shows nothing.** Boot messages go out before you
-  attach, so press Enter to get a new login prompt.
+  attach, so press Enter to get a new prompt.
 - **Serial scripting stalls.** BusyBox's shell asks the terminal for the
   cursor position (`ESC[6n`) and waits for the answer. `serial-exec.py`
   answers it; other tools may need to do the same.

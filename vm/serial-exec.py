@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
-"""Drive a VM serial console through its host pseudo-TTY (UTM 'ptty' serial port).
+"""Drive a VM serial console through its host pseudo-TTY (UTM 'ptty' serial
+port, or QEMU '-serial pty').
 
 Usage: serial-exec.py <tty> [--login USER] [--wait-for TEXT] [--timeout SEC] [CMD ...]
+       serial-exec.py <tty> --interactive
 
-Sends a newline, optionally logs in, runs each CMD, and prints everything the
-guest wrote. Exits non-zero if --wait-for TEXT never appears. Uses only the
-Python standard library that ships with macOS (Xcode Command Line Tools).
+Scripted: sends a newline, optionally logs in, runs each CMD, and prints
+everything the guest wrote. Exits non-zero if --wait-for TEXT never appears.
+Interactive: connects the terminal to the console; Ctrl-] quits.
+Uses only the Python standard library.
 """
 import argparse, os, re, select, sys, termios, time, tty
 
@@ -18,11 +21,15 @@ def main():
     ap.add_argument("--login", help="user name to send at a 'login:' prompt")
     ap.add_argument("--wait-for", help="text that must appear in the output")
     ap.add_argument("--timeout", type=float, default=60)
+    ap.add_argument("--interactive", action="store_true", help="attach the terminal; Ctrl-] quits")
     ap.add_argument("cmds", nargs="*")
     a = ap.parse_intermixed_args()
 
     fd = os.open(a.tty, os.O_RDWR | os.O_NOCTTY)
     tty.setraw(fd)  # no line buffering / echo on the host side
+    if a.interactive:
+        interactive(fd)
+        return
     termios.tcflush(fd, termios.TCIOFLUSH)
     buf = ""
     pending = ""
@@ -91,6 +98,36 @@ def main():
         ok = read_until(a.wait_for, max(1, end - time.time()))
     os.close(fd)
     sys.exit(0 if ok else 1)
+
+
+def interactive(fd):
+    """Bridge stdin/stdout and the console until Ctrl-] or the VM goes away."""
+    print("serial console connected; press Ctrl-] to quit", file=sys.stderr)
+    stdin = sys.stdin.fileno()
+    saved = termios.tcgetattr(stdin) if os.isatty(stdin) else None
+    if saved:
+        tty.setraw(stdin)
+    try:
+        os.write(fd, b"\r")  # get a fresh prompt
+        while True:
+            r, _, _ = select.select([fd, stdin], [], [])
+            if fd in r:
+                try:
+                    data = os.read(fd, 4096)
+                except OSError:  # VM stopped: pty closed
+                    break
+                if not data:
+                    break
+                os.write(sys.stdout.fileno(), data)
+            if stdin in r:
+                data = os.read(stdin, 1024)
+                if not data or b"\x1d" in data:  # EOF or Ctrl-]
+                    break
+                os.write(fd, data)
+    finally:
+        if saved:
+            termios.tcsetattr(stdin, termios.TCSADRAIN, saved)
+        print("\r\nserial console disconnected", file=sys.stderr)
 
 
 if __name__ == "__main__":

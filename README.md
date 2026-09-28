@@ -29,6 +29,8 @@ make qemu-arm64         # boot arm64 in QEMU (Ctrl-C to exit)
 
 On an Apple Silicon Mac, the arm64 image runs in UTM with hardware
 virtualization: `make utm-create utm-start utm-console`. See [docs/utm.md](docs/utm.md).
+With plain QEMU on any host (including inside a Linux build VM):
+`make qemu-start qemu-console`. See [docs/qemu.md](docs/qemu.md).
 
 ---
 
