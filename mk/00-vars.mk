@@ -49,6 +49,9 @@ else ifeq ($(HOST_ARCH),aarch64)
   TC_PATH_x86_64  := $(SYS_BIN)
   SYSROOT_x86_64  := /usr/x86_64-linux-gnu
 
+else ifeq ($(shell uname -s),Darwin)
+  # macOS has no Linux toolchain: build targets need a Linux host, but the
+  # UTM runner targets (mk/12-utm.mk) work with prebuilt kernel + disk image
 else
   $(error Unsupported host architecture: $(HOST_ARCH). Expected x86_64 or aarch64.)
 endif

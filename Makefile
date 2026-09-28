@@ -18,3 +18,4 @@ include mk/08-clean-help.mk
 include mk/09-init.mk
 include mk/10-disk.mk
 include mk/11-test.mk
+include mk/12-utm.mk

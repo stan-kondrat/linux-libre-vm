@@ -21,3 +21,6 @@ disks/
 /library/
 /local/
 /po-man/
+
+# UTM runner downloads (Alpine test files)
+utm/cache/

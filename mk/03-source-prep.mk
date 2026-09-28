@@ -42,7 +42,7 @@ endef
 
 PATCHED_PACKAGES := coreutils grep sed findutils diffutils gzip tar bash gawk \
                     procps-ng util-linux vim iproute2 runit dhcpcd \
-                    binutils gcc glibc linux-libre
+                    linux-libre
 
 $(foreach p,$(PATCHED_PACKAGES),$(eval $(call PATCH_SRC_PKG,$(p))))
 

@@ -28,9 +28,6 @@
 [submodule "sources/vim"]
 	path = sources/vim
 	url = https://github.com/vim/vim.git
-[submodule "sources/glibc"]
-	path = sources/glibc
-	url = https://sourceware.org/git/glibc.git
 [submodule "sources/procps-ng"]
 	path = sources/procps-ng
 	url = https://gitlab.com/procps-ng/procps.git
@@ -49,12 +46,6 @@
 [submodule "sources/linux-libre"]
 	path = sources/linux-libre
 	url = git://linux-libre.fsfla.org/releases.git
-[submodule "sources/binutils"]
-	path = sources/binutils
-	url = https://sourceware.org/git/binutils-gdb.git
-[submodule "sources/gcc"]
-	path = sources/gcc
-	url = https://gcc.gnu.org/git/gcc.git
 [submodule "sources/gnulib"]
 	path = sources/gnulib
 	url = https://git.savannah.gnu.org/git/gnulib.git

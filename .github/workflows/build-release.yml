@@ -54,16 +54,10 @@ jobs:
           submodules: false
 
       - name: Initialize submodules
-        run: |
-          # Clone all submodules except linux-libre (which uses git://)
-          # If the runner blocks git://, linux-libre will fail and we handle it
-          git submodule update --init --recursive 2>&1 || {
-            echo "::warning::git:// protocol may be blocked on this runner"
-            echo "::warning::If 'sources/linux-libre' failed to clone, you can:"
-            echo "::warning::  1. Mirror it to GitHub and update .gitmodules"
-            echo "::warning::  2. Or use a self-hosted runner with port 9418 open"
-            exit 1
-          }
+        # Shallow, pinned-commit fetch, one submodule at a time with retries.
+        # Full `git submodule update --init --recursive` hits HTTP 429/500
+        # from the GNU hosts and clones ~GBs of history.
+        run: scripts/fetch-submodules.sh
 
       # ── Cache keys ────────────────────────────────────────────────────────
       - name: Compute cache keys

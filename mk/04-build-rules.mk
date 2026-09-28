@@ -210,9 +210,9 @@ build-tar-$(1): $$(BUILD_DIR_$(1))/tar/.built
 
 $$(BUILD_DIR_$(1))/tar/.built: $$(BUILD_DIR_$(1))/tar/.copied | $(FAKE_BIN)/.stamp
 	@echo "=== Building tar for $(1) (gnulib bootstrap, in-tree) ==="
-	# Ensure paxutils & gnulib submodules are populated (they may be empty on fresh clone)
-	if [ -d "$(SOURCES_DIR)/tar/.git" ] || [ -f "$(SOURCES_DIR)/tar/.git" ]; then \
-	  cd "$(SOURCES_DIR)/tar" && git submodule update --init paxutils gnulib 2>/dev/null || true; \
+	# Ensure the paxutils submodule is populated (gnulib comes from GNULIB_SRCDIR)
+	if [ ! -f "$(SOURCES_DIR)/tar/paxutils/DISTFILES" ]; then \
+	  "$(CURDIR)/scripts/fetch-submodules.sh" sources/tar/paxutils; \
 	fi
 	# Re-copy sources if paxutils was just populated
 	if [ ! -f "$$(BUILD_DIR_$(1))/tar/paxutils/DISTFILES" ]; then \

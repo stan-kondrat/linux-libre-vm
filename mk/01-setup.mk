@@ -73,9 +73,9 @@ endif
 	@$(foreach pkg,bash coreutils grep sed gawk findutils diffutils gzip tar vim \
 	            iproute2 procps-ng util-linux runit dhcpcd,\
 	  [ -d "$(SOURCES_DIR)/$(pkg)" ] && echo "  $(pkg): OK" || \
-	    (echo "  $(pkg): MISSING — run 'git submodule update --init'" && exit 1);)
+	    (echo "  $(pkg): MISSING — run scripts/fetch-submodules.sh" && exit 1);)
 	@[ -d "$(GNULIB_DIR)" ] && echo "  gnulib: OK" || \
-	  (echo "  gnulib: MISSING — run 'git submodule update --init --recursive'" && exit 1)
+	  (echo "  gnulib: MISSING — run scripts/fetch-submodules.sh" && exit 1)
 	@echo ""
 	@echo "=== Environment OK ==="
 	@echo "  Host:     $(HOST_TRIPLET)"
