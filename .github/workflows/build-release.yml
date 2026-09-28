@@ -31,9 +31,6 @@ concurrency:
   group: ${{ github.ref }}-${{ github.workflow }}
   cancel-in-progress: ${{ github.ref_type != 'tag' }}
 
-env:
-  MAKEFLAGS: "-j$(nproc)"
-
 jobs:
   build:
     name: Build (${{ matrix.arch }})
@@ -144,6 +141,11 @@ jobs:
           sudo ln -sf /usr/bin/ccache /usr/lib/ccache/aarch64-linux-gnu-g++
           sudo ln -sf /usr/bin/ccache /usr/lib/ccache/aarch64-linux-gnu-cpp
 
+          # Put the wrappers first on PATH for all later steps. (A step-level
+          # `PATH: "/usr/lib/ccache:${{ env.PATH }}"` breaks PATH: env.PATH only
+          # holds workflow-defined variables, so it expands to empty.)
+          echo "/usr/lib/ccache" >> "$GITHUB_PATH"
+
           # Configure ccache
           ccache --max-size=500M
           ccache --zero-stats 2>/dev/null || true
@@ -171,13 +173,10 @@ jobs:
 
       - name: Check build environment
         run: |
-          export PATH="/usr/lib/ccache:$PATH"
           make check-env
 
       # ── Build ─────────────────────────────────────────────────────────────
       - name: Build ${{ matrix.arch }} userland + kernel
-        env:
-          PATH: "/usr/lib/ccache:${{ env.PATH }}"
         run: |
           # If build cache restored .built stamps, make will skip everything
           # and print "Nothing to be done".  That's the win.
@@ -185,11 +184,9 @@ jobs:
           make ARCH=${{ matrix.arch }} userland-${{ matrix.arch }}
 
           echo "=== make kernel-${{ matrix.arch }} ==="
-          make ARCH=${{ matrix.arch }} kernel -j$(nproc)
+          make ARCH=${{ matrix.arch }} kernel
 
       - name: Install ${{ matrix.arch }} to rootfs
-        env:
-          PATH: "/usr/lib/ccache:${{ env.PATH }}"
         run: |
           make ARCH=${{ matrix.arch }} install-${{ matrix.arch }}
           make ARCH=${{ matrix.arch }} install-kernel-${{ matrix.arch }}
