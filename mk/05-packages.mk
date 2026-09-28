@@ -116,17 +116,22 @@ install-libs-x86_64:
 	  libnss_files.so.2 libnss_dns.so.2 \
 	  libncursesw.so.6 libgmp.so.10 libmpfr.so.6"; \
 	if [ -n "$$SYSROOT" ] && [ -d "$$SYSROOT/lib" ]; then \
-	  cp -a "$$SYSROOT/lib64/ld-linux-x86-64.so.2" "$(ROOTFS_x86_64)/lib64/" 2>/dev/null || \
-	    cp -a "$$SYSROOT/lib/ld-linux-x86-64.so.2" "$(ROOTFS_x86_64)/lib64/"; \
+	  cp -L "$$SYSROOT/lib64/ld-linux-x86-64.so.2" "$(ROOTFS_x86_64)/lib64/" 2>/dev/null || \
+	    cp -L "$$SYSROOT/lib/ld-linux-x86-64.so.2" "$(ROOTFS_x86_64)/lib64/"; \
 	  for lib in $$LIBS; do \
-	    cp -a "$$SYSROOT/lib64/$$lib" "$(ROOTFS_x86_64)/lib/" 2>/dev/null || \
-	      cp -a "$$SYSROOT/lib/$$lib" "$(ROOTFS_x86_64)/lib/" 2>/dev/null || true; \
+	    cp -L "$$SYSROOT/lib64/$$lib" "$(ROOTFS_x86_64)/lib/" 2>/dev/null || \
+	      cp -L "$$SYSROOT/lib/$$lib" "$(ROOTFS_x86_64)/lib/" 2>/dev/null || true; \
 	  done; \
 	else \
-	  cp -a /usr/lib/ld-linux-x86-64.so.2 "$(ROOTFS_x86_64)/lib64/"; \
+	  DIRS="/usr/lib64 /usr/lib /usr/lib/x86_64-linux-gnu /lib64 /lib /lib/x86_64-linux-gnu"; \
+	  for d in $$DIRS; do \
+	    [ -e "$$d/ld-linux-x86-64.so.2" ] && cp -L "$$d/ld-linux-x86-64.so.2" "$(ROOTFS_x86_64)/lib64/" && break; \
+	  done; \
+	  [ -e "$(ROOTFS_x86_64)/lib64/ld-linux-x86-64.so.2" ] || { echo "ERROR: ld-linux-x86-64.so.2 not found"; exit 1; }; \
 	  for lib in $$LIBS; do \
-	    cp -a /usr/lib64/$$lib "$(ROOTFS_x86_64)/lib/" 2>/dev/null || \
-	      cp -a /usr/lib/$$lib "$(ROOTFS_x86_64)/lib/" 2>/dev/null || true; \
+	    for d in $$DIRS; do \
+	      [ -e "$$d/$$lib" ] && cp -L "$$d/$$lib" "$(ROOTFS_x86_64)/lib/" && break; \
+	    done; \
 	  done; \
 	fi
 	# ld-linux searches /usr/lib64/, not /lib/ — symlink so it finds our libs
@@ -140,18 +145,22 @@ install-libs-arm64:
 	LIBS="libc.so.6 libm.so.6 libpthread.so.0 librt.so.1 \
 	  libdl.so.2 libutil.so.1 libresolv.so.2"; \
 	if [ -n "$$SYSROOT" ] && [ -d "$$SYSROOT/lib" ]; then \
-	  cp -a "$$SYSROOT/lib/ld-linux-aarch64.so.1" "$(ROOTFS_arm64)/lib/"; \
+	  cp -L "$$SYSROOT/lib/ld-linux-aarch64.so.1" "$(ROOTFS_arm64)/lib/"; \
 	  ln -sf /lib/ld-linux-aarch64.so.1 "$(ROOTFS_arm64)/lib64/"; \
 	  for lib in $$LIBS; do \
-	    cp -a "$$SYSROOT/lib/$$lib" "$(ROOTFS_arm64)/lib/" 2>/dev/null || true; \
+	    cp -L "$$SYSROOT/lib/$$lib" "$(ROOTFS_arm64)/lib/" 2>/dev/null || true; \
 	  done; \
 	else \
-	  cp -a /usr/lib/ld-linux-aarch64.so.1 "$(ROOTFS_arm64)/lib/" 2>/dev/null || \
-	    cp -a /lib/ld-linux-aarch64.so.1 "$(ROOTFS_arm64)/lib/"; \
+	  DIRS="/usr/lib /usr/lib64 /usr/lib/aarch64-linux-gnu /lib /lib64 /lib/aarch64-linux-gnu"; \
+	  for d in $$DIRS; do \
+	    [ -e "$$d/ld-linux-aarch64.so.1" ] && cp -L "$$d/ld-linux-aarch64.so.1" "$(ROOTFS_arm64)/lib/" && break; \
+	  done; \
+	  [ -e "$(ROOTFS_arm64)/lib/ld-linux-aarch64.so.1" ] || { echo "ERROR: ld-linux-aarch64.so.1 not found"; exit 1; }; \
 	  ln -sf /lib/ld-linux-aarch64.so.1 "$(ROOTFS_arm64)/lib64/"; \
 	  for lib in $$LIBS; do \
-	    cp -a /usr/lib/$$lib "$(ROOTFS_arm64)/lib/" 2>/dev/null || \
-	      cp -a /usr/lib64/$$lib "$(ROOTFS_arm64)/lib/" 2>/dev/null || true; \
+	    for d in $$DIRS; do \
+	      [ -e "$$d/$$lib" ] && cp -L "$$d/$$lib" "$(ROOTFS_arm64)/lib/" && break; \
+	    done; \
 	  done; \
 	fi
 	# ld-linux on aarch64 may search /usr/lib64/ — symlink so it finds our libs

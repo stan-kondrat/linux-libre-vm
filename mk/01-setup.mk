@@ -48,9 +48,10 @@ else
 	@which $(CROSS_x86_64)gcc >/dev/null 2>&1 && \
 	  echo "  $(CROSS_x86_64)gcc: $$($(CROSS_x86_64)gcc --version | head -1)" || \
 	  (echo "ERROR: $(CROSS_x86_64)gcc not found — install cross-x86_64-linux-gnu" && exit 1)
-	@test -d "$(SYSROOT_x86_64)/usr/include" && \
+	@# Debian/Ubuntu cross sysroots use <sysroot>/include, others <sysroot>/usr/include
+	@{ test -d "$(SYSROOT_x86_64)/include" || test -d "$(SYSROOT_x86_64)/usr/include"; } && \
 	  echo "  sysroot: $(SYSROOT_x86_64)" || \
-	  (echo "ERROR: sysroot $(SYSROOT_x86_64)/usr/include not found" && exit 1)
+	  (echo "ERROR: sysroot $(SYSROOT_x86_64)/{,usr/}include not found" && exit 1)
 endif
 	@echo ""
 	@echo "=== Checking arm64 toolchain ==="
@@ -62,9 +63,10 @@ else
 	@which $(CROSS_arm64)gcc >/dev/null 2>&1 && \
 	  echo "  $(CROSS_arm64)gcc: $$($(CROSS_arm64)gcc --version | head -1)" || \
 	  (echo "ERROR: $(CROSS_arm64)gcc not found — install cross-aarch64-linux-gnu" && exit 1)
-	@test -d "$(SYSROOT_arm64)/usr/include" && \
+	@# Debian/Ubuntu cross sysroots use <sysroot>/include, others <sysroot>/usr/include
+	@{ test -d "$(SYSROOT_arm64)/include" || test -d "$(SYSROOT_arm64)/usr/include"; } && \
 	  echo "  sysroot: $(SYSROOT_arm64)" || \
-	  (echo "ERROR: sysroot $(SYSROOT_arm64)/usr/include not found" && exit 1)
+	  (echo "ERROR: sysroot $(SYSROOT_arm64)/{,usr/}include not found" && exit 1)
 endif
 	@echo ""
 	@echo "=== Checking submodules ==="
