@@ -121,7 +121,8 @@ $$(BUILD_DIR_$(2))/$(1)/.built: $$(BUILD_DIR_$(2))/$(1)/.copied | $(FAKE_BIN)/.s
 	  touch ABOUT-NLS ChangeLog po/Makevars.template && \
 	  printf 'all:\ninstall:\nclean:\n.PHONY: all install clean\n' > po/Makefile.in.in && \
 	  echo "$(3)" > .tarball-version && \
-	  PATH="$(TC_PATH_$(2)):$(FAKE_BIN_PATH)" GNULIB_SRCDIR="$(GNULIB_DIR)" ./bootstrap --gen 2>&1 || GNULIB_SRCDIR="$(GNULIB_DIR)" ./bootstrap 2>&1 | \
+	  export PATH="$(TC_PATH_$(2)):$(FAKE_BIN_PATH)" GNULIB_SRCDIR="$(GNULIB_DIR)" && \
+	  { ./bootstrap --gen 2>&1 || ./bootstrap --skip-po --no-git 2>&1; } | \
 	    grep -v "^  \|Copying\|running\|autoreconf:\|making\|ln -fs"
 	# Bootstrap may symlink git-version-gen to GNULIB_SRCDIR. Remove and rewrite.
 	rm -f "$$(BUILD_DIR_$(2))/$(1)/build-aux/git-version-gen"

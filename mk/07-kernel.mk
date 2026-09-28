@@ -28,7 +28,7 @@ $(eval $(call COPY_PKG,linux-libre,x86_64))
 $(eval $(call COPY_PKG,linux-libre,arm64))
 
 # Build all architectures
-kernel: kernel-x86_64 kernel-arm64
+kernel: $(addprefix kernel-,$(BUILD_ARCHS))
 
 # ── x86_64 ──────────────────────────────────────────────────────────────────
 
@@ -98,7 +98,7 @@ install-kernel-arm64: kernel-arm64
 
 # ── Install all kernels ─────────────────────────────────────────────────────
 
-install-kernel: install-kernel-x86_64 install-kernel-arm64
+install-kernel: $(addprefix install-kernel-,$(BUILD_ARCHS))
 	@echo "=== All kernels installed ==="
 
 # ═════════════════════════════════════════════════════════════════════════════

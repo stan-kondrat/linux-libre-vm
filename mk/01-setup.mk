@@ -39,6 +39,7 @@ check-env: build-dirs
 	@which rsync >/dev/null 2>&1 || (echo "WARNING: rsync not found; using cp instead" && \
 	  printf '#!/bin/sh\ncp -a "$$@"\n' > "$(FAKE_BIN)/rsync" && chmod +x "$(FAKE_BIN)/rsync")
 	@echo ""
+ifneq ($(filter x86_64,$(BUILD_ARCHS)),)
 	@echo "=== Checking x86_64 toolchain ==="
 ifeq ($(CROSS_x86_64),)
 	@which gcc >/dev/null 2>&1 && echo "  gcc: $$(gcc --version | head -1)" || \
@@ -47,13 +48,15 @@ ifeq ($(CROSS_x86_64),)
 else
 	@which $(CROSS_x86_64)gcc >/dev/null 2>&1 && \
 	  echo "  $(CROSS_x86_64)gcc: $$($(CROSS_x86_64)gcc --version | head -1)" || \
-	  (echo "ERROR: $(CROSS_x86_64)gcc not found — install cross-x86_64-linux-gnu" && exit 1)
+	  (echo "ERROR: $(CROSS_x86_64)gcc not found — install Void: cross-x86_64-linux-gnu cross-x86_64-linux-gnu-libc, Debian/Ubuntu: gcc-x86-64-linux-gnu libc6-dev-amd64-cross" && exit 1)
 	@# Debian/Ubuntu cross sysroots use <sysroot>/include, others <sysroot>/usr/include
 	@{ test -d "$(SYSROOT_x86_64)/include" || test -d "$(SYSROOT_x86_64)/usr/include"; } && \
 	  echo "  sysroot: $(SYSROOT_x86_64)" || \
-	  (echo "ERROR: sysroot $(SYSROOT_x86_64)/{,usr/}include not found" && exit 1)
+	  (echo "ERROR: sysroot $(SYSROOT_x86_64)/{,usr/}include not found — cross libc missing; install Void: cross-x86_64-linux-gnu-libc, Debian/Ubuntu: libc6-dev-amd64-cross" && exit 1)
 endif
 	@echo ""
+endif
+ifneq ($(filter arm64,$(BUILD_ARCHS)),)
 	@echo "=== Checking arm64 toolchain ==="
 ifeq ($(CROSS_arm64),)
 	@which gcc >/dev/null 2>&1 && echo "  gcc: $$(gcc --version | head -1)" || \
@@ -62,13 +65,14 @@ ifeq ($(CROSS_arm64),)
 else
 	@which $(CROSS_arm64)gcc >/dev/null 2>&1 && \
 	  echo "  $(CROSS_arm64)gcc: $$($(CROSS_arm64)gcc --version | head -1)" || \
-	  (echo "ERROR: $(CROSS_arm64)gcc not found — install cross-aarch64-linux-gnu" && exit 1)
+	  (echo "ERROR: $(CROSS_arm64)gcc not found — install Void: cross-aarch64-linux-gnu cross-aarch64-linux-gnu-libc, Debian/Ubuntu: gcc-aarch64-linux-gnu libc6-dev-arm64-cross" && exit 1)
 	@# Debian/Ubuntu cross sysroots use <sysroot>/include, others <sysroot>/usr/include
 	@{ test -d "$(SYSROOT_arm64)/include" || test -d "$(SYSROOT_arm64)/usr/include"; } && \
 	  echo "  sysroot: $(SYSROOT_arm64)" || \
-	  (echo "ERROR: sysroot $(SYSROOT_arm64)/{,usr/}include not found" && exit 1)
+	  (echo "ERROR: sysroot $(SYSROOT_arm64)/{,usr/}include not found — cross libc missing; install Void: cross-aarch64-linux-gnu-libc, Debian/Ubuntu: libc6-dev-arm64-cross" && exit 1)
 endif
 	@echo ""
+endif
 	@echo "=== Checking submodules ==="
 	@$(foreach pkg,bash coreutils grep sed gawk findutils diffutils gzip tar vim \
 	            iproute2 procps-ng util-linux runit dhcpcd,\
@@ -79,15 +83,6 @@ endif
 	@echo ""
 	@echo "=== Environment OK ==="
 	@echo "  Host:     $(HOST_TRIPLET)"
-	@echo "  Targets:  $(TARGETS)"
+	@echo "  Targets:  $(BUILD_ARCHS)"
 	@echo "  Config:"
-ifeq ($(CROSS_x86_64),)
-	@echo "    x86_64:  native (host gcc)"
-else
-	@echo "    x86_64:  cross ($(CROSS_x86_64)gcc, sysroot: $(SYSROOT_x86_64))"
-endif
-ifeq ($(CROSS_arm64),)
-	@echo "    arm64:   native (host gcc)"
-else
-	@echo "    arm64:   cross ($(CROSS_arm64)gcc, sysroot: $(SYSROOT_arm64))"
-endif
+	@$(foreach a,$(BUILD_ARCHS),echo "    $(a):  $(if $(CROSS_$(a)),cross ($(CROSS_$(a))gcc, sysroot: $(SYSROOT_$(a))),native (host gcc))";)

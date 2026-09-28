@@ -6,7 +6,11 @@ FAKE_AUTOPOINT  := $(FAKE_BIN)/autopoint
 FAKE_GPERF      := $(FAKE_BIN)/gperf
 FAKE_HELP2MAN   := $(FAKE_BIN)/help2man
 FAKE_GTKDOCIZE  := $(FAKE_BIN)/gtkdocize
+ifeq ($(shell which rsync 2>/dev/null),)
 FAKE_RSYNC      := $(FAKE_BIN)/rsync
+else
+FAKE_RSYNC      :=
+endif
 
 $(FAKE_BIN)/.stamp: $(FAKE_AUTOPOINT) $(FAKE_GPERF) $(FAKE_HELP2MAN) $(FAKE_GTKDOCIZE) $(FAKE_RSYNC)
 	@touch "$@"

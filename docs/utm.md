@@ -7,7 +7,8 @@ tools that ship with macOS and UTM — no Homebrew, no standalone QEMU:
 | Tool | Where it comes from | Used for |
 |------|---------------------|----------|
 | `osascript` | macOS | UTM AppleScript API: create and configure the VM |
-| `utmctl` | `/Applications/UTM.app/Contents/MacOS/utmctl` | start / stop / status / delete / console |
+| `utmctl` | `/Applications/UTM.app/Contents/MacOS/utmctl` | start / stop / status / delete |
+| `screen` | macOS | interactive serial console (`utmctl attach` is not implemented in UTM 5.0.x) |
 | `python3` | macOS (Xcode Command Line Tools) | scripted serial console (`utm/serial-exec.py`) |
 
 x86_64 images can only be emulated on Apple Silicon (slow); this runner is arm64 only.
@@ -26,14 +27,14 @@ the disk and network must be **virtio-mmio** devices (`virtio-blk-device`,
 
 ## Quick start
 
-Requirements: UTM 5.x in `/Applications`. The first run asks
+Requirements: UTM 5.x in `/Applications` (tested with 5.0.4 and 5.0.6). The first run asks
 "*Terminal* wants to control *UTM*" (Automation) — allow it.
 
 ```bash
 make utm-test-alpine   # optional: check the runner works on this Mac
 make utm-create        # uses the local build output by default
 make utm-start
-make utm-console       # serial console; detach with Ctrl-C
+make utm-console       # serial console (screen): quit Ctrl-a k, detach Ctrl-a d
 make utm-delete
 ```
 
@@ -89,7 +90,7 @@ PCI). The kernel ignores them because it has no PCI support.
 
 ### UTM behaviours this relies on
 
-Found while building the runner with UTM 5.0.4:
+Found while building the runner with UTM 5.0.4, still true in 5.0.6:
 
 | Behaviour | Consequence |
 |-----------|-------------|
@@ -99,6 +100,7 @@ Found while building the runner with UTM 5.0.4:
 | A file given with `-drive` in additional arguments is not writable (`Operation not permitted`) | The disk is imported as a UTM drive instead |
 | The bare word `none` means directory share mode `none` | Drive interface "none" is written as `«constant QeDiQdIN»` |
 | Drive IDs appear as `drive<ID>` on the QEMU command line | Our `virtio-blk-device` refers to the imported disk that way |
+| `utmctl attach` prints "attach command is not implemented yet!" and the pty path | `utm-console` opens the pty with `screen` instead |
 
 ## Alpine smoke test
 

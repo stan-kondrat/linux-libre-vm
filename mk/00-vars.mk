@@ -10,6 +10,9 @@ HOST_TRIPLET    := $(shell gcc -dumpmachine)
 
 # ── Target architectures ────────────────────────────────────────────────────
 TARGETS         := x86_64 arm64
+# Architectures built by aggregate targets (build, kernel, install, disk-image,
+# check-env): only $(ARCH) when set, e.g. `make ARCH=arm64 build`
+BUILD_ARCHS     := $(or $(ARCH),$(TARGETS))
 
 # ── Per-target triplet and cross prefix ────────────────────────────────────
 # Toolchain is provided by the host system, not built from source.
@@ -76,6 +79,7 @@ KERNEL_CONFIG_arm64  := $(CURDIR)/kernel-arm64.config
 
 FAKE_BIN            := $(CURDIR)/build/fake-bin
 FAKE_BIN_PATH       := $(FAKE_BIN):$(PATH)
+export PATH         := $(FAKE_BIN):/usr/bin:$(PATH)
 
 PARALLEL            := -j$$(nproc)
 STRIP               := 1
@@ -107,3 +111,7 @@ USERLAND_CONFIG := \
 # The variable name is constructed from the package name (with hyphens) and arch:
 #   $$($$(1)_CONFIGURE_$(2)) in build macros
 procps-ng_CONFIGURE_arm64 := --without-ncurses
+# util-linux: skip chown/chgrp/setuid in "make install" (needs root; the build
+# runs as a normal user and installs into a DESTDIR)
+util-linux_CONFIGURE_x86_64 := --disable-makeinstall-chown --disable-makeinstall-setuid
+util-linux_CONFIGURE_arm64  := --disable-makeinstall-chown --disable-makeinstall-setuid

@@ -57,7 +57,7 @@ userland-x86_64: $(addprefix build-,$(addsuffix -x86_64,$(USERLAND_PKGS)))
 userland-arm64: $(addprefix build-,$(addsuffix -arm64,$(USERLAND_PKGS)))
 	@echo "=== All userland packages built (arm64) ==="
 
-userland: userland-x86_64 userland-arm64
+userland: $(addprefix userland-,$(BUILD_ARCHS))
 	@echo "=== All userland packages built (all targets) ==="
 
 all: check-env build-dirs userland
@@ -75,7 +75,7 @@ install-x86_64: userland-x86_64
 	@echo "=== Installing to $(ROOTFS_x86_64) ==="
 	mkdir -p "$(ROOTFS_x86_64)"
 	for pkg in $(USERLAND_PKGS); do \
-	  $(MAKE) install-$$pkg-x86_64; \
+	  $(MAKE) install-$$pkg-x86_64 || exit 1; \
 	done
 	$(MAKE) install-libs-x86_64
 	$(MAKE) strip-all-x86_64 2>/dev/null || true
@@ -88,7 +88,7 @@ install-arm64: userland-arm64
 	@echo "=== Installing to $(ROOTFS_arm64) ==="
 	mkdir -p "$(ROOTFS_arm64)"
 	for pkg in $(USERLAND_PKGS); do \
-	  $(MAKE) install-$$pkg-arm64; \
+	  $(MAKE) install-$$pkg-arm64 || exit 1; \
 	done
 	$(MAKE) install-libs-arm64
 	$(MAKE) strip-all-arm64 2>/dev/null || true
@@ -97,7 +97,7 @@ install-arm64: userland-arm64
 	$(MAKE) install-init-arm64
 	@echo "=== Install complete (arm64) ==="
 
-install-all: install-x86_64 install-arm64
+install-all: $(addprefix install-,$(BUILD_ARCHS))
 	@echo "=== All installs complete ==="
 
 install: install-all
@@ -134,6 +134,14 @@ install-libs-x86_64:
 	    done; \
 	  done; \
 	fi
+	# Everything else the binaries link against (DT_NEEDED, recursively):
+	# native builds pick up host libraries such as ncurses, gmp or pam
+	if [ -n "$(SYSROOT_x86_64)" ]; then \
+	  DIRS="$(SYSROOT_x86_64)/lib $(SYSROOT_x86_64)/usr/lib $(SYSROOT_x86_64)/lib64 $(SYSROOT_x86_64)/usr/lib64"; \
+	else \
+	  DIRS="/usr/lib /usr/lib64 /usr/lib/x86_64-linux-gnu /lib /lib64 /lib/x86_64-linux-gnu"; \
+	fi; \
+	$(CURDIR)/mk/copy-libs.sh "$(ROOTFS_x86_64)" $(CROSS_x86_64)readelf $$DIRS
 	# ld-linux searches /usr/lib64/, not /lib/ — symlink so it finds our libs
 	ln -sf /lib "$(ROOTFS_x86_64)/usr/lib64" 2>/dev/null || true
 	@echo "=== Shared libraries installed ==="
@@ -163,6 +171,14 @@ install-libs-arm64:
 	    done; \
 	  done; \
 	fi
+	# Everything else the binaries link against (DT_NEEDED, recursively):
+	# native builds pick up host libraries such as ncurses, gmp or pam
+	if [ -n "$(SYSROOT_arm64)" ]; then \
+	  DIRS="$(SYSROOT_arm64)/lib $(SYSROOT_arm64)/usr/lib $(SYSROOT_arm64)/lib64 $(SYSROOT_arm64)/usr/lib64"; \
+	else \
+	  DIRS="/usr/lib /usr/lib64 /usr/lib/aarch64-linux-gnu /lib /lib64 /lib/aarch64-linux-gnu"; \
+	fi; \
+	$(CURDIR)/mk/copy-libs.sh "$(ROOTFS_arm64)" $(CROSS_arm64)readelf $$DIRS
 	# ld-linux on aarch64 may search /usr/lib64/ — symlink so it finds our libs
 	ln -sf /lib "$(ROOTFS_arm64)/usr/lib64" 2>/dev/null || true
 	@echo "=== Shared libraries installed ==="
@@ -177,6 +193,8 @@ ifneq ($(STRIP),0)
 	find "$(ROOTFS_x86_64)"/bin "$(ROOTFS_x86_64)"/sbin \
 	     "$(ROOTFS_x86_64)"/usr/bin "$(ROOTFS_x86_64)"/usr/sbin \
 	     -type f -exec $(CROSS_x86_64)strip -s {} \; 2>/dev/null || true
+	find "$(ROOTFS_x86_64)"/lib "$(ROOTFS_x86_64)"/usr/lib "$(ROOTFS_x86_64)"/usr/libexec \
+	     -type f -name '*.so*' -exec $(CROSS_x86_64)strip --strip-unneeded {} \; 2>/dev/null || true
 endif
 
 strip-all-arm64:
@@ -185,6 +203,8 @@ ifneq ($(STRIP),0)
 	find "$(ROOTFS_arm64)"/bin "$(ROOTFS_arm64)"/sbin \
 	     "$(ROOTFS_arm64)"/usr/bin "$(ROOTFS_arm64)"/usr/sbin \
 	     -type f -exec $(CROSS_arm64)strip -s {} \; 2>/dev/null || true
+	find "$(ROOTFS_arm64)"/lib "$(ROOTFS_arm64)"/usr/lib "$(ROOTFS_arm64)"/usr/libexec \
+	     -type f -name '*.so*' -exec $(CROSS_arm64)strip --strip-unneeded {} \; 2>/dev/null || true
 endif
 
 prune-docs-x86_64:
@@ -247,6 +267,15 @@ consolidate-bin-$(1):
 	if [ -d "$(ROOTFS_$(1))/usr/sbin" ]; then \
 	  mv "$(ROOTFS_$(1))/usr/sbin/"* "$(ROOTFS_$(1))/bin/" 2>/dev/null || true; \
 	  rmdir "$(ROOTFS_$(1))/usr/sbin" 2>/dev/null || true; \
+	fi
+	# Move real programs out of /sbin (iproute2: ip, ss; util-linux: agetty,
+	# fdisk, ...) before recreating it; only move files not already in /bin
+	if [ -d "$(ROOTFS_$(1))/sbin" ]; then \
+	  for f in "$(ROOTFS_$(1))/sbin/"*; do \
+	    [ -e "$$$$f" ] || [ -L "$$$$f" ] || continue; \
+	    b=$$$$(basename "$$$$f"); \
+	    [ -e "$(ROOTFS_$(1))/bin/$$$$b" ] || mv "$$$$f" "$(ROOTFS_$(1))/bin/"; \
+	  done; \
 	fi
 	# /sbin/ only contains symlinks to /bin/ — recreate fresh to avoid loop
 	rm -rf "$(ROOTFS_$(1))/sbin"

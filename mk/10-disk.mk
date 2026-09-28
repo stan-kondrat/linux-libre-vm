@@ -32,7 +32,7 @@ endef
 
 $(foreach t,$(TARGETS),$(eval $(call DISK_IMAGE_RULE,$(t))))
 
-disk-image: disk-image-x86_64 disk-image-arm64
+disk-image: $(addprefix disk-image-,$(BUILD_ARCHS))
 	@echo "=== All disk images created ==="
 
 disk-image-clean:
