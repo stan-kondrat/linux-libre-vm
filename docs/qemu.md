@@ -49,7 +49,8 @@ make qemu-x86_64
 make qemu-arm64 BOOT_DIAG=1   # adds boot.diag=1 (boot diagnostics in runit stage 1)
 ```
 
-Background, like the UTM runner:
+Background, like the UTM runner, with state and shared folder in `VM_DIR`
+(default `vm_tmp/linux-libre-default`):
 
 ```bash
 make qemu-start          # arm64 by default; QEMU_ARCH=x86_64 for the other image
@@ -63,6 +64,18 @@ make qemu-test-alpine    # optional: check the runner works on this host
 to `disks/disk-*.img` (unlike UTM, which works on a copy). Use `SNAPSHOT=1`
 with `vm/qemu.sh` to discard them on exit, or rebuild the image with
 `make ARCH=arm64 disk-image`.
+
+**`VM_DIR/vm.sh`**, written on `create`/`start`, runs this script for that VM
+(see [utm.md](utm.md#vm-directory-and-shared-folder)). Inside a Linux build VM
+it picks the QEMU runner automatically.
+
+**Shared folder**: `VM_DIR/shared` is shared over 9p (mount tag `share`;
+`virtio-9p-device` on arm64, `virtio-9p-pci` on x86_64) and mounted at
+`/mnt/shared` in the guest at boot. QEMU uses `security_model=none`, so files
+the guest writes belong to the host user. That also works when the host folder
+is itself a shared mount without xattr support, such as the repo inside a
+UTM build VM. The UTM and QEMU runners use the same `VM_DIR` layout, so both
+can use `vm_tmp/linux-libre-default/shared`. `make qemu-delete` keeps it.
 
 **Networking** is QEMU user-mode NAT (the guest reaches the network, the host
 cannot connect in). The image's `dhcpcd` runit service configures `eth0` by
@@ -84,7 +97,9 @@ ARCH=arm64 KERNEL=Image.gz DISK=disk-arm64.img vm/qemu.sh args   # show the QEMU
 | Variable | Default | Meaning |
 |----------|---------|---------|
 | `ARCH` | `arm64` | `arm64` or `x86_64` |
-| `NAME` | `linux-libre-$ARCH` | instance name; state (pid, log) in `build/qemu/$NAME/` |
+| `VM_DIR` | — (`make`: `vm_tmp/linux-libre-default`) | directory for state (pid, log) and `shared/`; unset = `build/qemu/$NAME/`, no sharing |
+| `NAME` | basename of `VM_DIR`, else `linux-libre-$ARCH` | instance name |
+| `SHARE` | `VM_DIR/shared` | host folder shared with the guest; empty = no sharing |
 | `KERNEL` | — | kernel image (required) |
 | `INITRD` | — | optional initrd |
 | `DISK` | — | raw disk image, attached as `/dev/vda` |
@@ -99,7 +114,7 @@ ARCH=arm64 KERNEL=Image.gz DISK=disk-arm64.img vm/qemu.sh args   # show the QEMU
 Commands: `run` (foreground), `start`, `console`, `exec`, `serial-path`,
 `status`, `stop`, `delete`, plus `create`/`recreate`, which exist for parity
 with `vm/utm.sh`. In the background the console is a host pseudo-TTY
-(`-serial pty`). Its path is read from `build/qemu/$NAME/qemu.log`.
+(`-serial pty`). Its path is read from the instance's `qemu.log`.
 
 ## Alpine smoke test
 
@@ -111,7 +126,7 @@ a few minutes under TCG (`TIMEOUT` defaults to 240 s).
 ## Troubleshooting
 
 - **`QEMU failed to start`**: the log is printed; it is also in
-  `build/qemu/$NAME/qemu.log`.
+  `VM_DIR/qemu.log` (or `build/qemu/$NAME/qemu.log`).
 - **`kvm` requested but fails**: check `ls -l /dev/kvm` and membership of the
   `kvm` group. Use `ACCEL=tcg` to run without it.
 - **Nothing on the console after `make qemu-console`**: boot messages go

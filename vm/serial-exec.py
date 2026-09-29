@@ -62,8 +62,9 @@ def main():
 
     LOGIN = re.compile(r"login: ?$")
     # "host:~# " / "user@host$ ": the prompt char follows a non-space, non-'#'
-    # character, so progress bars ("####  ") never match
-    SHELL = re.compile(r"[^\s#][#$] $")
+    # character, so progress bars ("####  ") never match; "~ # " (BusyBox) is
+    # a single word, a space and the prompt char on its own line
+    SHELL = re.compile(r"([^\s#][#$]|^\S+ [#$]) $")
 
     def at_prompt(pattern):
         # Only the text after the last newline counts

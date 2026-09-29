@@ -22,7 +22,7 @@ NETBOOT=$ALPINE/releases/aarch64/netboot-3.24.2
 RUNNER=$HERE/${RUNNER:-utm}.sh
 [ -x "$RUNNER" ] || { echo "unknown RUNNER: $RUNNER" >&2; exit 2; }
 export ARCH=arm64
-export NAME=${NAME:-linux-libre-alpine-test}
+export VM_DIR=${VM_DIR:-$(cd "$HERE/.." && pwd)/vm_tmp/alpine-test}  # bundle/state + shared/
 export KERNEL=$CACHE/vmlinuz-virt
 export INITRD=$CACHE/initramfs-virt
 export DISK=$CACHE/blank.img
@@ -41,12 +41,22 @@ ffe65ec5a0c0bf470042ad28f7ce7aa5f842ce8090e4230fb2703a7a34e1bebe  initramfs-virt
 EOF
 [ -f "$DISK" ] || dd if=/dev/zero of="$DISK" bs=1048576 count=0 seek=64 2>/dev/null  # sparse 64 MB
 
-cleanup() { [ "${KEEP:-0}" = 1 ] || "$RUNNER" delete; }
+cleanup() { [ "${KEEP:-0}" = 1 ] || { "$RUNNER" delete; rm -rf "$VM_DIR"; }; }
 trap cleanup EXIT
+
+# Shared folder: the guest must read a token written here, and write one back
+mkdir -p "$VM_DIR/shared"
+token=$(date +%s)-$$
+echo "$token" > "$VM_DIR/shared/from-host.txt"
+rm -f "$VM_DIR/shared/from-guest.txt"
 
 "$RUNNER" recreate
 "$RUNNER" start
-out=$("$RUNNER" exec 'uname -m' 'cat /proc/cmdline' 'test -b /dev/vda && echo vda-is-block-device' 'ip -4 addr show eth0') || {
+out=$("$RUNNER" exec 'uname -m' 'cat /proc/cmdline' 'test -b /dev/vda && echo vda-is-block-device' 'ip -4 addr show eth0' \
+	'modprobe 9pnet_virtio; modprobe 9p; mkdir -p /mnt/shared' \
+	'mount -t 9p -o trans=virtio,version=9p2000.L share /mnt/shared' \
+	'echo "host-token=$(cat /mnt/shared/from-host.txt)"' \
+	'cp /mnt/shared/from-host.txt /mnt/shared/from-guest.txt') || {
 	echo "$out"; echo "FAIL: no shell on the serial console"; exit 1; }
 echo "$out"
 
@@ -56,4 +66,10 @@ check "kernel booted (aarch64)"      '^aarch64$'
 check "kernel command line"          'alpine_repo='
 check "disk attached as /dev/vda"    '^vda-is-block-device$'
 check "network up (DHCP address)"    'inet [0-9]'
+check "shared folder: guest reads"   "^host-token=$token\$"
+if [ "$(cat "$VM_DIR/shared/from-guest.txt" 2>/dev/null)" = "$token" ]; then
+	echo "PASS: shared folder: guest writes"
+else
+	echo "FAIL: shared folder: guest writes"; fail=1
+fi
 exit $fail

@@ -24,3 +24,5 @@ disks/
 
 # VM runner downloads (Alpine test files)
 vm/cache/
+
+vm_tmp/

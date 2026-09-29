@@ -12,6 +12,10 @@
 # Devices follow the kernel configs: arm64 uses virtio-mmio on "virt" (the
 # kernel has no PCI), x86_64 uses virtio-pci on "q35".
 #
+# With VM_DIR set, the instance state (pid, log) lives in VM_DIR and the
+# folder VM_DIR/shared is shared with the guest over 9p (mount tag "share");
+# VM_DIR/vm.sh runs this script for that VM (./vm.sh help).
+#
 # Usage: vm/qemu.sh <command> [args]
 #   run                    boot in the foreground, console on this terminal
 #                          (quit: Ctrl-a x)
@@ -20,14 +24,20 @@
 #   exec [CMD ...]         log in as root on the serial console, run CMDs
 #   serial-path            host pseudo-TTY of the serial console
 #   status                 started / stopped
+#   help | version         this help / tool, git and QEMU versions
 #   stop                   power off (kills QEMU after 10 s)
 #   create | recreate | delete
 #                          check settings / stop and reset / stop and remove
-#                          state (for parity with vm/utm.sh)
+#                          state; never the shared folder (parity with vm/utm.sh)
 #
 # Environment:
 #   ARCH     arm64 | x86_64             (default: arm64)
-#   NAME     instance name, state in build/qemu/NAME  (default: linux-libre-ARCH)
+#   VM_DIR   directory for state and shared folder, e.g. vm_tmp/linux-libre-default
+#            (default: build/qemu/NAME, no shared folder)
+#   NAME     instance name              (default: basename of VM_DIR, else
+#                                        linux-libre-ARCH)
+#   SHARE    host folder shared with the guest (default: VM_DIR/shared;
+#            empty = no sharing)
 #   KERNEL   kernel image (required)
 #   INITRD   initrd (optional)
 #   DISK     raw disk image (optional), attached as /dev/vda and written to
@@ -45,7 +55,14 @@
 set -eu
 
 ARCH=${ARCH:-arm64}
+if [ -n "${VM_DIR:-}" ]; then
+	mkdir -p "$VM_DIR"
+	VM_DIR=$(cd "$VM_DIR" && pwd)
+	NAME=${NAME:-$(basename "$VM_DIR")}
+	SHARE=${SHARE-$VM_DIR/shared}  # unset: default; set but empty: no sharing
+fi
 NAME=${NAME:-linux-libre-$ARCH}
+SHARE=${SHARE:-}
 MEM=${MEM:-256}
 CPUS=${CPUS:-1}
 NET=${NET:-user}
@@ -53,7 +70,7 @@ ACCEL=${ACCEL:-auto}
 SNAPSHOT=${SNAPSHOT:-0}
 TIMEOUT=${TIMEOUT:-60}
 HERE=$(cd "$(dirname "$0")" && pwd)
-STATE=$(cd "$HERE/.." && pwd)/build/qemu/$NAME
+STATE=${VM_DIR:-$(cd "$HERE/.." && pwd)/build/qemu/$NAME}
 PIDFILE=$STATE/qemu.pid
 LOG=$STATE/qemu.log
 
@@ -63,15 +80,16 @@ case $ARCH in
 arm64)
 	QEMU=qemu-system-aarch64
 	TTY=ttyAMA0
-	BLK=virtio-blk-device NIC=virtio-net-device
+	BLK=virtio-blk-device NIC=virtio-net-device NINEP=virtio-9p-device
 	;;
 x86_64)
 	QEMU=qemu-system-x86_64
 	TTY=ttyS0
-	BLK=virtio-blk-pci NIC=virtio-net-pci
+	BLK=virtio-blk-pci NIC=virtio-net-pci NINEP=virtio-9p-pci
 	;;
 *) die "ARCH must be arm64 or x86_64 (got '$ARCH')" ;;
 esac
+APPEND_SET=${APPEND:-}  # only an explicit APPEND is stored in vm.sh
 APPEND=${APPEND:-root=/dev/vda rw console=$TTY}
 
 accel() {
@@ -114,6 +132,12 @@ qemu_args() {
 		echo -device; echo "$BLK,drive=drive0"
 		[ "$SNAPSHOT" = 1 ] && echo -snapshot
 	fi
+	if [ -n "$SHARE" ]; then
+		# security_model=none: guest writes land as the host user; works on
+		# host folders without xattr support (e.g. a UTM/virtiofs mount)
+		echo -fsdev; echo "local,id=share0,path=$SHARE,security_model=none"
+		echo -device; echo "$NINEP,fsdev=share0,mount_tag=share"
+	fi
 	if [ "$NET" = user ]; then
 		echo -netdev; echo user,id=net0
 		echo -device; echo "$NIC,netdev=net0"
@@ -128,6 +152,11 @@ check() {
 	[ -z "${INITRD:-}" ] || [ -f "$INITRD" ] || die "initrd not found: $INITRD"
 	[ -z "${DISK:-}" ] || [ -f "$DISK" ] || die "disk not found: $DISK"
 	case ${DISK:-} in *,*) die "DISK path must not contain ',': $DISK" ;; esac
+	if [ -n "$SHARE" ]; then
+		mkdir -p "$SHARE"
+		SHARE=$(cd "$SHARE" && pwd)
+		case $SHARE in *,*) die "SHARE path must not contain ',': $SHARE" ;; esac
+	fi
 	case $NET in user | none) ;; *) die "NET must be user or none" ;; esac
 }
 
@@ -151,8 +180,16 @@ cmd_run() {
 	run_qemu -serial mon:stdio
 }
 
+# VM_DIR/vm.sh: per-VM management script (see vm/write-vm-sh.sh)
+write_vm_sh() {
+	[ -n "${VM_DIR:-}" ] || return 0
+	ARCH=$ARCH KERNEL=$KERNEL INITRD=${INITRD:-} DISK=${DISK:-} VM_DIR=$VM_DIR \
+		APPEND=${APPEND_SET:-} MEM=$MEM CPUS=$CPUS "$HERE/write-vm-sh.sh"
+}
+
 cmd_start() {
 	check
+	write_vm_sh
 	running && { echo "'$NAME' is already running"; return 0; }
 	mkdir -p "$STATE"
 	rm -f "$PIDFILE"
@@ -196,9 +233,16 @@ exec)        tty=$(cmd_serial_path) || exit 1
 serial-path) cmd_serial_path ;;
 status)      running && echo started || echo stopped ;;
 stop)        cmd_stop ;;
-create)      check; echo "ok: $NAME ($QEMU, accel $(accel))" ;;
+create)      check; write_vm_sh; echo "ok: $NAME ($QEMU, accel $(accel))" ;;
 recreate)    cmd_stop >/dev/null; check; echo "reset $NAME" ;;
-delete)      cmd_stop >/dev/null; rm -rf "$STATE"; echo "deleted $NAME" ;;
+delete)      cmd_stop >/dev/null; rm -f "$PIDFILE" "$LOG"
+             [ -n "${VM_DIR:-}" ] || rm -rf "$STATE"  # VM_DIR keeps shared/
+             echo "deleted $NAME" ;;
 args)        check; qemu_args ;;  # debugging: print the QEMU command line
-*)           sed -n '2,45p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+help | -h | --help)
+             awk 'NR > 2 && /^# ═/ { exit } NR > 2' "$0" | sed 's/^# \{0,1\}//' ;;
+version | --version)
+             echo "vm/qemu.sh $(cat "$HERE/VERSION") (linux-libre-vm $(git -C "$HERE/.." rev-parse --short HEAD 2>/dev/null || echo unknown))"
+             if command -v "$QEMU" >/dev/null; then "$QEMU" --version | head -1; else echo "$QEMU not found"; fi ;;
+*)           awk 'NR > 2 && /^# ═/ { exit } NR > 2' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac

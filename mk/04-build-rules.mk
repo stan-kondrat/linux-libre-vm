@@ -314,8 +314,10 @@ build-iproute2-$(1): $$(BUILD_DIR_$(1))/iproute2/.built
 
 $$(BUILD_DIR_$(1))/iproute2/.built: $$(BUILD_DIR_$(1))/iproute2/.copied
 	@echo "=== Building iproute2 for $(1) ==="
+	# Cross builds: PKG_CONFIG=false, or configure picks up the build host's
+	# libraries (e.g. libelf) and the link fails for the target
 	cd "$$(BUILD_DIR_$(1))/iproute2" && \
-	  CC=$$(CROSS_$(1))gcc AR=$$(CROSS_$(1))ar \
+	  CC=$$(CROSS_$(1))gcc AR=$$(CROSS_$(1))ar $$(if $$(CROSS_$(1)),PKG_CONFIG=false) \
 	  ./configure --prefix=/usr
 	PATH="$(TC_PATH_$(1)):$$(FAKE_BIN_PATH)" \
 	  CC=$$(CROSS_$(1))gcc AR=$$(CROSS_$(1))ar \

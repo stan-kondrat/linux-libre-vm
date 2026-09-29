@@ -7,8 +7,13 @@
 # Homebrew, no standalone QEMU. See docs/utm.md.
 #
 # The VM uses UTM's QEMU backend with the Hypervisor.framework (hvf), no UEFI,
-# no display. Devices are virtio-mmio (virtio-blk-device / virtio-net-device)
-# because the linux-libre arm64 kernel is built without PCI.
+# no display. Devices are virtio-mmio (virtio-blk-device / virtio-net-device /
+# virtio-9p-device) because the linux-libre arm64 kernel is built without PCI.
+#
+# With VM_DIR set, everything lives in that directory instead of UTM's own
+# storage: the VM bundle VM_DIR/NAME.utm (config + disk copy) and the shared
+# folder VM_DIR/shared, which the guest mounts with 9p (mount tag "share"),
+# plus VM_DIR/vm.sh, which runs this script for that VM (./vm.sh help).
 #
 # Usage: vm/utm.sh <command> [args]
 #   create | recreate      create the VM from the environment below
@@ -16,10 +21,19 @@
 #   console                interactive serial console (Ctrl-] quits)
 #   exec [CMD ...]         log in as root on the serial console, run CMDs
 #   serial-path            host pseudo-TTY of the serial console
-#   delete                 stop and delete the VM
+#   delete                 stop and delete the VM (keeps VM_DIR/shared)
+#   help | version         this help / tool, git and UTM versions
+#   list                   all UTM VMs: name, status, bundle path (bundles
+#                          under LIST_DIRS are matched by UUID; others are in
+#                          UTM's own storage), plus unregistered bundles
 #
 # Environment:
-#   NAME     VM name in UTM             (default: linux-libre-arm64)
+#   VM_DIR   directory for the VM bundle and shared folder, e.g. vm_tmp/linux-libre-default
+#            (default: none — UTM's own storage, no shared folder)
+#   NAME     VM name in UTM             (default: basename of VM_DIR, else
+#                                        linux-libre-arm64)
+#   SHARE    host folder shared with the guest (default: VM_DIR/shared;
+#            empty = no sharing)
 #   KERNEL   kernel image (required for create)
 #   INITRD   initrd (optional)
 #   DISK     raw disk image (optional), copied into the VM, attached as /dev/vda
@@ -28,10 +42,21 @@
 #   CPUS     CPU cores                  (default: 1)
 #   NET      UTM network mode: shared|emulated|host|none  (default: shared)
 #   TIMEOUT  seconds for 'exec'         (default: 60)
+#   LIST_DIRS  directories whose */*.utm bundles 'list' matches
+#            (default: <repo>/vm_tmp and the parent of VM_DIR)
 # ═════════════════════════════════════════════════════════════════════════════
 
 set -eu
 
+BUNDLE=
+if [ -n "${VM_DIR:-}" ]; then
+	mkdir -p "$VM_DIR"
+	VM_DIR=$(cd "$VM_DIR" && pwd)
+	NAME=${NAME:-$(basename "$VM_DIR")}
+	BUNDLE=$VM_DIR/$NAME.utm
+	SHARE=${SHARE-$VM_DIR/shared}  # unset: default; set but empty: no sharing
+fi
+SHARE=${SHARE:-}
 NAME=${NAME:-linux-libre-arm64}
 APPEND=${APPEND:-root=/dev/vda rw console=ttyAMA0}
 MEM=${MEM:-256}
@@ -41,7 +66,7 @@ TIMEOUT=${TIMEOUT:-60}
 UTMCTL=${UTMCTL:-/Applications/UTM.app/Contents/MacOS/utmctl}
 HERE=$(cd "$(dirname "$0")" && pwd)
 
-die() { echo "utm-vm: $*" >&2; exit 1; }
+die() { echo "utm.sh: $*" >&2; exit 1; }
 
 # Absolute path of an existing file. UTM splits QEMU argument strings on
 # whitespace and QEMU splits options on ',', so neither may appear in paths.
@@ -69,10 +94,17 @@ cmd_create() {
 	kernel=$(abspath "$KERNEL")
 	initrd=; [ -z "${INITRD:-}" ] || initrd=$(abspath "$INITRD")
 	disk=;   [ -z "${DISK:-}" ]   || disk=$(abspath "$DISK")
+	share=
+	if [ -n "$SHARE" ]; then
+		mkdir -p "$SHARE"
+		share=$(cd "$SHARE" && pwd)
+		case $share in *[[:space:],]*) die "SHARE path must not contain spaces or ',': $share" ;; esac
+	fi
+	[ -z "$BUNDLE" ] || [ ! -e "$BUNDLE" ] || die "$BUNDLE already exists (use 'delete' or 'recreate')"
 
-	osascript - "$NAME" "$kernel" "$initrd" "$disk" "$APPEND" "$MEM" "$CPUS" "$NET" <<-'EOF'
+	osascript - "$NAME" "$kernel" "$initrd" "$disk" "$APPEND" "$MEM" "$CPUS" "$NET" "$share" <<-'EOF' >/dev/null
 	on run argv
-		set {vmName, kernelPath, initrdPath, diskPath, cmdline, memMB, cpuN, netMode} to argv
+		set {vmName, kernelPath, initrdPath, diskPath, cmdline, memMB, cpuN, netMode, sharePath} to argv
 		-- Resolve file references outside the tell block (inside, UTM would handle them)
 		set kernelFile to POSIX file kernelPath
 		if initrdPath is not "" then set initrdFile to POSIX file initrdPath
@@ -88,7 +120,14 @@ cmd_create() {
 			set cpu cores of cfg to (cpuN as integer)
 			set hypervisor of cfg to true
 			set uefi of cfg to false
-			set directory share mode of cfg to none
+			-- VirtFS: UTM adds "-fsdev local,id=virtfs0,path=<shared dir>" (the
+			-- dir itself is set per registration, see cmd_share) plus a PCI
+			-- virtio-9p device; we add an mmio one on the same fsdev below
+			if sharePath is "" then
+				set directory share mode of cfg to none
+			else
+				set directory share mode of cfg to VirtFS
+			end if
 			set displays of cfg to {}
 
 			-- Drives replace the default USB CD + VirtIO (PCI) disk. All use
@@ -135,10 +174,50 @@ cmd_create() {
 				set qargs to qargs & {{argument string:"-device"}, ¬
 					{argument string:"virtio-blk-device,drive=drive" & driveId}}
 			end if
+			if sharePath is not "" then
+				set qargs to qargs & {{argument string:"-device"}, ¬
+					{argument string:"virtio-9p-device,fsdev=virtfs0,mount_tag=share"}}
+			end if
 			set qemu additional arguments of cfg to qargs
 			update configuration of vm with cfg
 		end tell
 		return "created " & vmName
+	end run
+	EOF
+
+	if [ -n "$BUNDLE" ]; then
+		# Move the VM out of UTM's storage: export the bundle to VM_DIR,
+		# delete UTM's copy, and open the exported bundle, which UTM then
+		# registers in place (a linked VM, running from VM_DIR)
+		osascript - "$NAME" "$BUNDLE" <<-'EOF'
+		on run argv
+			set dst to POSIX file (item 2 of argv)
+			tell application "UTM" to export virtual machine named (item 1 of argv) to dst
+		end run
+		EOF
+		"$UTMCTL" delete "$NAME"
+		open -g -a UTM "$BUNDLE"
+		i=0
+		until vm_exists; do
+			i=$((i + 1)); [ $i -le 30 ] || die "UTM did not register $BUNDLE"
+			sleep 1
+		done
+	fi
+	[ -z "$share" ] || cmd_share "$share"
+	if [ -n "$BUNDLE" ]; then
+		ARCH=arm64 KERNEL=$kernel INITRD=$initrd DISK=$disk VM_DIR=$VM_DIR "$HERE/write-vm-sh.sh"
+	fi
+	echo "created $NAME${BUNDLE:+ in $VM_DIR}${share:+, shared folder $share}"
+	[ -z "$BUNDLE" ] || echo "manage it with $VM_DIR/vm.sh (help, start, console, ...)"
+}
+
+# Set the VM's shared directory. UTM keeps it in the registration, not the
+# config, and 'update registry' is the scripting call that changes it.
+cmd_share() {
+	osascript - "$NAME" "$1" <<-'EOF' >/dev/null
+	on run argv
+		set dir to POSIX file (item 2 of argv)
+		tell application "UTM" to update registry of virtual machine named (item 1 of argv) with {dir}
 	end run
 	EOF
 }
@@ -152,11 +231,56 @@ cmd_serial_path() {
 	EOF
 }
 
+# Deleting a VM removes its bundle (also a linked one in VM_DIR) but never the
+# shared folder
 cmd_delete() {
-	vm_exists || { echo "VM '$NAME' does not exist"; return 0; }
-	"$UTMCTL" stop "$NAME" --kill >/dev/null 2>&1 || true
-	"$UTMCTL" delete "$NAME"
+	if vm_exists; then
+		"$UTMCTL" stop "$NAME" --kill >/dev/null 2>&1 || true
+		"$UTMCTL" delete "$NAME"
+	elif [ -n "$BUNDLE" ] && [ -e "$BUNDLE" ]; then
+		rm -rf "$BUNDLE"  # left over, not registered in UTM
+	else
+		echo "VM '$NAME' does not exist"; return 0
+	fi
 	echo "deleted $NAME"
+}
+
+# UTM's scripting interface has no bundle path, and its registry is inside
+# UTM's sandbox container. Bundles we manage are found on disk instead and
+# matched to registered VMs by the UUID in their config.plist.
+cmd_list() {
+	dirs=${LIST_DIRS:-"$(cd "$HERE/.." && pwd)/vm_tmp${VM_DIR:+ $(dirname "$VM_DIR")}"}
+	vms=$(osascript <<-'EOF'
+	tell application "UTM"
+		set out to ""
+		repeat with v in virtual machines
+			set out to out & (id of v) & tab & (name of v) & tab & ((status of v) as text) & linefeed
+		end repeat
+	end tell
+	return out
+	EOF
+	)
+	bundles=$(for d in $dirs; do
+		for b in "$d"/*/*.utm; do
+			[ -f "$b/config.plist" ] || continue
+			u=$(plutil -extract Information.UUID raw "$b/config.plist" 2>/dev/null) || continue
+			printf '%s\t%s\n' "$u" "$b"
+		done
+	done | sort -u)
+	tab=$(printf '\t')
+	pretty() { case $1 in "$HOME"/*) echo "~${1#"$HOME"}" ;; *) echo "$1" ;; esac; }
+	printf '%-24s %-15s %s\n' NAME STATUS PATH
+	echo "$vms" | while IFS=$tab read -r id name status; do
+		[ -n "$id" ] || continue
+		path=$(echo "$bundles" | awk -F'\t' -v u="$id" '$1 == u { print $2; exit }')
+		if [ -n "$path" ]; then path=$(pretty "$path"); else path="(UTM storage)"; fi
+		printf '%-24s %-15s %s\n' "$name" "$status" "$path"
+	done
+	echo "$bundles" | while IFS=$tab read -r id path; do
+		[ -n "$id" ] || continue
+		echo "$vms" | grep -q "^$id$tab" && continue
+		printf '%-24s %-15s %s\n' "$(basename "$path" .utm)" "not registered" "$(pretty "$path")"
+	done
 }
 
 cmd=${1:-}
@@ -176,5 +300,11 @@ serial-path) cmd_serial_path ;;
 status)      "$UTMCTL" status "$NAME" ;;
 stop)        "$UTMCTL" stop "$NAME" ;;
 delete)      cmd_delete ;;
-*)           sed -n '2,31p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+list)        cmd_list ;;
+help | -h | --help)
+             awk 'NR > 2 && /^# ═/ { exit } NR > 2' "$0" | sed 's/^# \{0,1\}//' ;;
+version | --version)
+             echo "vm/utm.sh $(cat "$HERE/VERSION") (linux-libre-vm $(git -C "$HERE/.." rev-parse --short HEAD 2>/dev/null || echo unknown))"
+             echo "UTM $("$UTMCTL" version 2>/dev/null || echo 'not found')" ;;
+*)           awk 'NR > 2 && /^# ═/ { exit } NR > 2' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac

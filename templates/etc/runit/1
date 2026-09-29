@@ -24,6 +24,12 @@ cat /etc/hostname 2>/dev/null > /proc/sys/kernel/hostname 2>/dev/null || echo li
 # Configure loopback
 ip link set lo up 2>/dev/null || true
 
+# Host shared folder (9p, mount tag "share") when the VM runner provides one
+if grep -qs share /sys/bus/virtio/devices/*/mount_tag; then
+	mkdir -p /mnt/shared
+	mount -t 9p -o trans=virtio,version=9p2000.L,msize=262144 share /mnt/shared 2>/dev/null || true
+fi
+
 # Make sure /etc/runit/stopit exists
 touch /etc/runit/stopit
 chmod 0 /etc/runit/stopit

@@ -33,9 +33,10 @@ Requirements: UTM 5.x in `/Applications` (tested with 5.0.4 and 5.0.6). The firs
 
 ```bash
 make utm-test-alpine   # optional: check the runner works on this Mac
-make utm-create        # uses the local build output by default
+make utm-create        # VM "linux-libre-default" in vm_tmp/linux-libre-default, from the local build output
 make utm-start
 make utm-console       # serial console; Ctrl-] quits (the VM keeps running)
+make utm-list          # all UTM VMs: name, status, bundle path
 make utm-delete
 ```
 
@@ -48,19 +49,56 @@ make utm-create UTM_KERNEL=linux-libre-vmlinuz-arm64 UTM_DISK=linux-libre-vm-arm
 The Linux build targets need a Linux host; on macOS only the `utm-*` targets
 are usable.
 
+### VM directory and shared folder
+
+Everything for a VM lives in one directory, `VM_DIR` (default `vm_tmp/linux-libre-default`,
+git-ignored), not in UTM's own storage:
+
+```
+vm_tmp/linux-libre-default/
+├── linux-libre-default.utm/   UTM bundle: config.plist + Data/<disk>.qcow2 (UTM runs it in place)
+├── shared/                    shared with the guest, mounted at /mnt/shared
+└── vm.sh                      management script for this VM (generated)
+```
+
+`vm.sh` runs `vm/utm.sh` (on macOS) or `vm/qemu.sh` (elsewhere; `RUNNER=utm|qemu`
+chooses) with `VM_DIR` set to its directory and the kernel/disk it was created
+with, stored relative to the repo. So it works from any directory, and in a
+Linux build VM that mounts the repo at another path:
+
+```bash
+vm_tmp/linux-libre-default/vm.sh help       # also: version
+vm_tmp/linux-libre-default/vm.sh start
+vm_tmp/linux-libre-default/vm.sh console
+vm_tmp/linux-libre-default/vm.sh recreate   # after rebuilding the disk image
+```
+
+The VM is named after the directory. More VMs side by side:
+`make utm-create utm-start VM_DIR=vm_tmp/vm2`. `make utm-delete` removes the
+bundle but never `shared/`.
+
+Inside the guest the folder is mounted at boot (runit stage 1) when the kernel
+has 9p support, which the image's kernel config enables. By hand:
+
+```bash
+mount -t 9p -o trans=virtio,version=9p2000.L share /mnt/shared
+```
+
 ### Script interface
 
 `make utm-*` wraps `vm/utm.sh`, which can also be used directly:
 
 ```bash
-NAME=my-vm KERNEL=Image.gz DISK=disk-arm64.img vm/utm.sh create
-NAME=my-vm vm/utm.sh start
-NAME=my-vm vm/utm.sh exec 'uname -a' 'df -h'   # log in as root, run, print
+VM_DIR=vm_tmp/vm2 KERNEL=Image.gz DISK=disk-arm64.img vm/utm.sh create
+VM_DIR=vm_tmp/vm2 vm/utm.sh start
+VM_DIR=vm_tmp/vm2 vm/utm.sh exec 'uname -a' 'df -h'   # log in as root, run, print
 ```
 
 | Variable | Default | Meaning |
 |----------|---------|---------|
-| `NAME` | `linux-libre-arm64` | VM name in UTM |
+| `VM_DIR` | — (`make`: `vm_tmp/linux-libre-default`) | directory for the bundle and `shared/`; unset = UTM's own storage, no sharing |
+| `NAME` | basename of `VM_DIR`, else `linux-libre-arm64` | VM name in UTM |
+| `SHARE` | `VM_DIR/shared` | host folder shared with the guest; empty = no sharing |
 | `KERNEL` | — | kernel image (required for `create`) |
 | `INITRD` | — | optional initrd |
 | `DISK` | — | raw disk image, copied into the VM, attached as `/dev/vda` |
@@ -73,7 +111,8 @@ NAME=my-vm vm/utm.sh exec 'uname -a' 'df -h'   # log in as root, run, print
 password), and the `dhcpcd` runit service configures `eth0` by DHCP from UTM's
 shared network at boot.
 
-**The disk is a copy.** UTM imports `DISK` into the VM bundle (as qcow2).
+**The disk is a copy.** UTM imports `DISK` into the VM bundle (as qcow2, in
+`VM_DIR/<name>.utm/Data/`).
 After rebuilding the image, run `make utm-recreate` to pick it up; changes
 made inside the VM are not written back to `disks/disk-arm64.img`.
 
@@ -81,7 +120,8 @@ made inside the VM are not written back to `disks/disk-arm64.img`.
 
 The VM is created through UTM's AppleScript API with these settings:
 
-- QEMU backend, `aarch64`, machine `virt`, hypervisor on, UEFI off, no display, no directory sharing
+- QEMU backend, `aarch64`, machine `virt`, hypervisor on, UEFI off, no display
+- directory sharing: VirtFS, with the shared folder set through `update registry`
 - one serial port on a host pseudo-TTY (becomes the guest's PL011 `ttyAMA0`)
 - network card `virtio-net-device` in UTM's shared (NAT) mode
 - drives with interface "none" (UTM attaches no guest device to them):
@@ -89,6 +129,10 @@ The VM is created through UTM's AppleScript API with these settings:
   - `KERNEL` and `INITRD` as **removable** drives, so UTM keeps a sandbox bookmark to the original files
 - QEMU additional arguments:
   `-kernel … -append "…" [-initrd …] -device virtio-blk-device,drive=drive<disk-id>`
+  `-device virtio-9p-device,fsdev=virtfs0,mount_tag=share` (mmio 9p on UTM's VirtFS backend)
+
+With `VM_DIR`, the VM is then exported to `VM_DIR/<name>.utm`, UTM's copy is
+deleted, and the exported bundle is opened, so UTM registers it in place.
 
 UTM adds its own devices as well (USB controllers, virtio-serial, virtio-rng on
 PCI). The kernel ignores them because it has no PCI support.
@@ -106,6 +150,11 @@ Found while building the runner with UTM 5.0.4, still true in 5.0.6:
 | The bare word `none` means directory share mode `none` | Drive interface "none" is written as `«constant QeDiQdIN»` |
 | Drive IDs appear as `drive<ID>` on the QEMU command line | Our `virtio-blk-device` refers to the imported disk that way |
 | `utmctl attach` prints "attach command is not implemented yet!" and the pty path | `utm-console` opens the pty with `vm/serial-exec.py --interactive` instead |
+| New VMs always go into UTM's container; `export` writes a bundle anywhere, and opening a `.utm` registers it where it is | `create` exports to `VM_DIR` and reopens it from there |
+| Neither the scripting interface nor `utmctl list` report where a VM's bundle is; UTM's registry is inside its sandbox container | `list` finds bundles under `vm_tmp/` (or `LIST_DIRS`) and matches them to VMs by the UUID in `config.plist`; any other VM is shown as "(UTM storage)" |
+| `utmctl delete` on a VM registered in place deletes its bundle files too | `delete` never touches `VM_DIR/shared`, which is outside the bundle |
+| The QEMU shared folder is not in the configuration but in the registration; `update registry with {folder}` sets it | Set after the VM is registered from `VM_DIR` |
+| VirtFS mode adds `-fsdev local,id=virtfs0,…` and a PCI `virtio-9p-pci` device | We add `virtio-9p-device` on the same `virtfs0`, since the kernel has no PCI |
 
 ## Alpine smoke test
 
@@ -115,10 +164,11 @@ and `initramfs-virt`, about 20 MB, downloaded to `vm/cache/` and pinned by
 SHA-256. The VM shape matches ours, except that Alpine needs its initramfs to
 load drivers. The test:
 
-1. creates the VM with a blank 64 MB disk and boots it
+1. creates the VM in `vm_tmp/alpine-test` with a blank 64 MB disk and boots it
 2. logs in as root on the serial console
 3. checks that the kernel booted, the command line was passed, `/dev/vda` exists and `eth0` got a DHCP address
-4. deletes the VM (keep it with `KEEP=1 make utm-test-alpine`)
+4. mounts the shared folder and checks that the guest reads a file written on the host, and writes one back
+5. deletes the VM and its directory (keep them with `KEEP=1 make utm-test-alpine`)
 
 A full run takes about 50 s. Alpine downloads its packages and kernel modules
 at boot, so the Mac needs internet access.
