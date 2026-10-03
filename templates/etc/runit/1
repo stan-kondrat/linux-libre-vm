@@ -15,8 +15,15 @@ mkdir -p /dev/pts /dev/shm
 mount -t devpts devpts /dev/pts -o nosuid,noexec,gid=5,mode=0620
 mount -t tmpfs tmpfs /dev/shm -o nosuid,noexec,nodev,mode=1777
 
-# Create service directory symlink
-ln -sf /etc/service /service 2>/dev/null || true
+# Create service directory symlink. -n: from the second boot on, /service
+# already exists, and plain -sf would follow it and create
+# /etc/service/service, which runsvdir then supervises as a service (with a
+# supervise/ dir of its own). Remove that if an earlier boot left it.
+if [ -L /etc/service/service ]; then
+	rm -f /etc/service/service
+	rm -rf /etc/service/supervise
+fi
+ln -sfn /etc/service /service 2>/dev/null || true
 
 # Set hostname
 cat /etc/hostname 2>/dev/null > /proc/sys/kernel/hostname 2>/dev/null || echo linux-libre > /proc/sys/kernel/hostname

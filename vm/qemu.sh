@@ -20,8 +20,9 @@
 #   run                    boot in the foreground, console on this terminal
 #                          (quit: Ctrl-a x)
 #   start                  boot in the background (console on a pty)
-#   console                interactive serial console (Ctrl-] quits)
-#   exec [CMD ...]         log in as root on the serial console, run CMDs
+#   console [--force]      interactive serial console (Ctrl-] quits); only one
+#                          at a time, --force takes it over from another one
+#   exec [--force] [CMD ...]  log in as root on the serial console, run CMDs
 #   serial-path            host pseudo-TTY of the serial console
 #   status                 started / stopped
 #   help | version         this help / tool, git and QEMU versions
@@ -203,7 +204,7 @@ cmd_start() {
 
 # QEMU prints "char device redirected to /dev/pts/N (label serial0)" at start
 cmd_serial_path() {
-	running || die "'$NAME' is not running"
+	running || die "'$NAME' is not running; start it first"
 	p=$(sed -n 's/.*char device redirected to \(\/dev\/[^ ]*\).*/\1/p' "$LOG" | head -1)
 	[ -n "$p" ] || die "serial pty not found in $LOG"
 	echo "$p"
@@ -226,9 +227,9 @@ case $cmd in
 run)         cmd_run ;;
 start)       cmd_start ;;
 console)     tty=$(cmd_serial_path) || exit 1
-             exec python3 "$HERE/serial-exec.py" "$tty" --interactive ;;
+             exec python3 "$HERE/serial-exec.py" "$tty" --interactive --name "$NAME" "$@" ;;
 exec)        tty=$(cmd_serial_path) || exit 1
-             exec python3 "$HERE/serial-exec.py" "$tty" \
+             exec python3 "$HERE/serial-exec.py" "$tty" --name "$NAME" \
                --login root --timeout "$TIMEOUT" "$@" ;;
 serial-path) cmd_serial_path ;;
 status)      running && echo started || echo stopped ;;

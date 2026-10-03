@@ -131,3 +131,6 @@ a few minutes under TCG (`TIMEOUT` defaults to 240 s).
   `kvm` group. Use `ACCEL=tcg` to run without it.
 - **Nothing on the console after `make qemu-console`**: boot messages go
   out before you attach, so press Enter to get a prompt.
+- **"console … is already in use by PID …"**: only one console or `exec` can
+  use the serial port at a time (see [utm.md](utm.md#troubleshooting)); quit
+  the other one or pass `--force`.

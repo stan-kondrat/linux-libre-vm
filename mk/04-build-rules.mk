@@ -394,8 +394,11 @@ $$(BUILD_DIR_$(1))/vim/.built: $$(BUILD_DIR_$(1))/vim/.copied
 	@touch "$$@"
 	@echo "=== vim built ($(1)) ==="
 
+# STRIP=true: vim's configure picks the build host's strip, which cannot read
+# cross-compiled binaries ("Unable to recognise the format"). strip-all-$(1)
+# strips with the right tool later (and honours STRIP=0).
 install-vim-$(1): build-vim-$(1)
-	$$(MAKE) -C "$$(BUILD_DIR_$(1))/vim" DESTDIR="$$(ROOTFS_$(1))" install
+	$$(MAKE) -C "$$(BUILD_DIR_$(1))/vim" DESTDIR="$$(ROOTFS_$(1))" STRIP=true install
 endef
 
 # ── runit (custom build — package/compile) ────────────────────────────────

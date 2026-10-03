@@ -18,8 +18,9 @@
 # Usage: vm/utm.sh <command> [args]
 #   create | recreate      create the VM from the environment below
 #   start | stop | status  control it (utmctl)
-#   console                interactive serial console (Ctrl-] quits)
-#   exec [CMD ...]         log in as root on the serial console, run CMDs
+#   console [--force]      interactive serial console (Ctrl-] quits); only one
+#                          at a time, --force takes it over from another one
+#   exec [--force] [CMD ...]  log in as root on the serial console, run CMDs
 #   serial-path            host pseudo-TTY of the serial console
 #   delete                 stop and delete the VM (keeps VM_DIR/shared)
 #   help | version         this help / tool, git and UTM versions
@@ -222,8 +223,47 @@ cmd_share() {
 	EOF
 }
 
-# Host pseudo-TTY of the first serial port (VM must be running)
+vm_status() { "$UTMCTL" status "$NAME" 2>/dev/null || echo "not found"; }
+
+# utmctl prints "Error from event: ... (OSStatus error -10004.)" on every
+# start although it works; the outcome is checked with 'status' instead
+utmctl_quiet() {
+	{ "$UTMCTL" "$@" 2>&1 >&3 | grep -v 'OSStatus error -10004' >&2; } 3>&1 || true
+}
+
+cmd_start() {
+	case $(vm_status) in
+	started) echo "$NAME is already running"; return 0 ;;
+	"not found") die "VM '$NAME' does not exist (use 'create')" ;;
+	esac
+	utmctl_quiet start --hide "$NAME"
+	i=0
+	until [ "$(vm_status)" = started ]; do
+		i=$((i + 1)); [ $i -le 10 ] || die "$NAME did not start (status: $(vm_status))"
+		sleep 1
+	done
+	echo "started $NAME; attach with: ${VM_DIR:+$VM_DIR/vm.sh }console"
+}
+
+cmd_stop() {
+	case $(vm_status) in
+	stopped) echo "$NAME is not running"; return 0 ;;
+	"not found") die "VM '$NAME' does not exist" ;;
+	esac
+	utmctl_quiet stop "$NAME"
+	i=0
+	until [ "$(vm_status)" = stopped ]; do
+		i=$((i + 1)); [ $i -le 15 ] || die "$NAME did not stop (status: $(vm_status))"
+		sleep 1
+	done
+	echo "stopped $NAME"
+}
+
+# Host pseudo-TTY of the first serial port. UTM still reports the last path
+# after the VM stopped, so check that it runs.
 cmd_serial_path() {
+	st=$(vm_status)
+	[ "$st" = started ] || die "$NAME is not running (status: $st); start it first"
 	osascript - "$NAME" <<-'EOF'
 	on run argv
 		tell application "UTM" to return address of serial port 1 of virtual machine named (item 1 of argv)
@@ -288,17 +328,16 @@ cmd=${1:-}
 case $cmd in
 create)      cmd_create ;;
 recreate)    cmd_delete; cmd_create ;;
-start)       "$UTMCTL" start --hide "$NAME" ;;
+start)       cmd_start ;;
 console)     # 'utmctl attach' only prints the pty path in UTM 5.0.x
-             tty=$(cmd_serial_path)
-             [ -e "$tty" ] || die "no serial console (is the VM running?)"
-             exec python3 "$HERE/serial-exec.py" "$tty" --interactive ;;
+             tty=$(cmd_serial_path) || exit 1
+             exec python3 "$HERE/serial-exec.py" "$tty" --interactive --name "$NAME" "$@" ;;
 exec)        tty=$(cmd_serial_path) || exit 1
-             exec python3 "$HERE/serial-exec.py" "$tty" \
+             exec python3 "$HERE/serial-exec.py" "$tty" --name "$NAME" \
                --login root --timeout "$TIMEOUT" "$@" ;;
 serial-path) cmd_serial_path ;;
 status)      "$UTMCTL" status "$NAME" ;;
-stop)        "$UTMCTL" stop "$NAME" ;;
+stop)        cmd_stop ;;
 delete)      cmd_delete ;;
 list)        cmd_list ;;
 help | -h | --help)

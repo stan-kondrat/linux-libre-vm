@@ -184,7 +184,18 @@ at boot, so the Mac needs internet access.
   ps -ww -o command= -p "$(pgrep -f QEMULauncher.app/Contents/MacOS/QEMULauncher)" | sed 's/ -\([a-zA-Z]\)/\n-\1/g'
   ```
 - **`make utm-console` shows nothing.** Boot messages go out before you
-  attach, so press Enter to get a new prompt.
+  attach, and the console sends nothing on attach, so press Enter to get a
+  new prompt.
+- **"console … is already in use by PID …".** A serial console has a single
+  input stream: with two readers attached, each byte goes to only one of
+  them, and both show garbled text and seem to freeze. So `console` and
+  `exec` take a lock and refuse while another process (another console, a
+  running `exec`, `screen`, …) has the port open. Quit the other console
+  with Ctrl-] or close its terminal, or pass `--force` to stop it and take
+  over: `vm.sh console --force`.
+- **`Error from event: … (OSStatus error -10004.)`** is printed by `utmctl`
+  on every start although the start works; `vm/utm.sh start` filters it and
+  checks the VM's status instead.
 - **Serial scripting stalls.** BusyBox's shell asks the terminal for the
   cursor position (`ESC[6n`) and waits for the answer. `serial-exec.py`
   answers it; other tools may need to do the same.
