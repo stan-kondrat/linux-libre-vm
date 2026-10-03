@@ -28,8 +28,9 @@
 #   help | version         this help / tool, git and QEMU versions
 #   stop                   power off (kills QEMU after 10 s)
 #   create | recreate | delete
-#                          check settings / stop and reset / stop and remove
-#                          state; never the shared folder (parity with vm/utm.sh)
+#                          check settings (and download a release) / stop and
+#                          reset (fresh disk copy, newest release) / stop and
+#                          remove state; never the shared folder
 #
 # Environment:
 #   ARCH     arm64 | x86_64             (default: arm64)
@@ -39,10 +40,16 @@
 #                                        linux-libre-ARCH)
 #   SHARE    host folder shared with the guest (default: VM_DIR/shared;
 #            empty = no sharing)
-#   KERNEL   kernel image (required)
+#   VM_SOURCE  where the kernel and disk come from when KERNEL is not set:
+#            release — download a GitHub release (vm/release.sh), the default;
+#                      the VM gets its own copy of the disk (VM state dir)
+#            local   — this repo's build output, disk used in place
+#   VM_RELEASE release tag for VM_SOURCE=release (default: latest; the tag
+#            found first is kept for the VM until 'recreate')
+#   KERNEL   kernel image (overrides VM_SOURCE)
 #   INITRD   initrd (optional)
-#   DISK     raw disk image (optional), attached as /dev/vda and written to
-#            directly unless SNAPSHOT=1
+#   DISK     raw disk image, attached as /dev/vda and written to directly
+#            unless SNAPSHOT=1 (default: from VM_SOURCE when KERNEL is not set)
 #   APPEND   kernel command line        (default: root=/dev/vda rw console=<serial>)
 #   MEM      RAM in MiB                 (default: 256)
 #   CPUS     CPU cores                  (default: 1)
@@ -70,10 +77,15 @@ NET=${NET:-user}
 ACCEL=${ACCEL:-auto}
 SNAPSHOT=${SNAPSHOT:-0}
 TIMEOUT=${TIMEOUT:-60}
+VM_SOURCE=${VM_SOURCE:-release}
+VM_RELEASE=${VM_RELEASE:-latest}
 HERE=$(cd "$(dirname "$0")" && pwd)
+REPO=$(cd "$HERE/.." && pwd)
 STATE=${VM_DIR:-$(cd "$HERE/.." && pwd)/build/qemu/$NAME}
 PIDFILE=$STATE/qemu.pid
 LOG=$STATE/qemu.log
+TAGFILE=$STATE/release  # tag of the release this VM was created from
+KERNEL_SET=${KERNEL:-} DISK_SET=${DISK:-}  # chosen by the caller (stored in vm.sh)
 
 die() { echo "qemu.sh: $*" >&2; exit 1; }
 
@@ -146,9 +158,43 @@ qemu_args() {
 	for x in ${QEMU_EXTRA:-}; do echo "$x"; done
 }
 
+# Kernel and disk: an explicit KERNEL wins, otherwise VM_SOURCE picks a
+# downloaded release or the local build output
+resolve_files() {
+	[ -z "${KERNEL:-}" ] || return 0
+	case $VM_SOURCE in
+	release)
+		tag=$VM_RELEASE
+		[ "$tag" != latest ] || [ ! -f "$TAGFILE" ] || tag=$(cat "$TAGFILE")
+		out=$(VM_RELEASE=$tag "$HERE/release.sh" fetch "$ARCH") || exit 1
+		KERNEL=$(echo "$out" | sed -n 's/^KERNEL=//p')
+		if [ -z "${DISK:-}" ]; then
+			# QEMU writes to the disk: give the VM its own copy, keep the
+			# downloaded image pristine
+			DISK=$STATE/disk-$ARCH.img
+			mkdir -p "$STATE"
+			if [ ! -f "$DISK" ]; then
+				cp "$(echo "$out" | sed -n 's/^DISK=//p')" "$DISK.part" && mv "$DISK.part" "$DISK"
+			fi
+		fi
+		basename "$(dirname "$KERNEL")" >"$TAGFILE"
+		;;
+	local)
+		case $ARCH in
+		arm64) KERNEL=$REPO/sources-build/arm64/linux-libre/arch/arm64/boot/Image.gz ;;
+		x86_64) KERNEL=$REPO/sources-build/x86_64/linux-libre/arch/x86/boot/bzImage ;;
+		esac
+		DISK=${DISK:-$REPO/disks/disk-$ARCH.img}
+		[ -f "$KERNEL" ] && [ -f "$DISK" ] || die "no local build ($KERNEL, $DISK):" \
+			"run 'make build install disk-image', or use VM_SOURCE=release"
+		;;
+	*) die "VM_SOURCE must be release or local (got '$VM_SOURCE')" ;;
+	esac
+}
+
 check() {
 	command -v "$QEMU" >/dev/null || die "$QEMU not found (install QEMU)"
-	[ -n "${KERNEL:-}" ] || die "KERNEL is required"
+	resolve_files
 	[ -f "$KERNEL" ] || die "kernel not found: $KERNEL"
 	[ -z "${INITRD:-}" ] || [ -f "$INITRD" ] || die "initrd not found: $INITRD"
 	[ -z "${DISK:-}" ] || [ -f "$DISK" ] || die "disk not found: $DISK"
@@ -184,9 +230,17 @@ cmd_run() {
 # VM_DIR/vm.sh: per-VM management script (see vm/write-vm-sh.sh)
 write_vm_sh() {
 	[ -n "${VM_DIR:-}" ] || return 0
-	ARCH=$ARCH KERNEL=$KERNEL INITRD=${INITRD:-} DISK=${DISK:-} VM_DIR=$VM_DIR \
-		APPEND=${APPEND_SET:-} MEM=$MEM CPUS=$CPUS "$HERE/write-vm-sh.sh"
+	if [ -n "$KERNEL_SET" ]; then
+		set -- KERNEL="$KERNEL_SET" VM_SOURCE= VM_RELEASE=
+	else
+		set -- KERNEL= VM_SOURCE="$VM_SOURCE" VM_RELEASE="$VM_RELEASE"
+	fi
+	env "$@" ARCH="$ARCH" INITRD="${INITRD:-}" DISK="$DISK_SET" VM_DIR="$VM_DIR" \
+		APPEND="${APPEND_SET:-}" MEM="$MEM" CPUS="$CPUS" "$HERE/write-vm-sh.sh"
 }
+
+# Forget the disk copy and the pinned release (recreate / delete)
+reset_state() { rm -f "$STATE/disk-$ARCH.img" "$TAGFILE"; }
 
 cmd_start() {
 	check
@@ -234,9 +288,10 @@ exec)        tty=$(cmd_serial_path) || exit 1
 serial-path) cmd_serial_path ;;
 status)      running && echo started || echo stopped ;;
 stop)        cmd_stop ;;
-create)      check; write_vm_sh; echo "ok: $NAME ($QEMU, accel $(accel))" ;;
-recreate)    cmd_stop >/dev/null; check; echo "reset $NAME" ;;
-delete)      cmd_stop >/dev/null; rm -f "$PIDFILE" "$LOG"
+create)      check; write_vm_sh; echo "ok: $NAME ($QEMU, accel $(accel)), kernel $KERNEL" ;;
+recreate)    cmd_stop >/dev/null; reset_state; check; write_vm_sh
+             echo "reset $NAME, kernel $KERNEL, disk $DISK" ;;
+delete)      cmd_stop >/dev/null; reset_state; rm -f "$PIDFILE" "$LOG"
              [ -n "${VM_DIR:-}" ] || rm -rf "$STATE"  # VM_DIR keeps shared/
              echo "deleted $NAME" ;;
 args)        check; qemu_args ;;  # debugging: print the QEMU command line

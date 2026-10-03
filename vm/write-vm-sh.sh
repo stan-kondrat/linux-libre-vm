@@ -7,7 +7,8 @@
 # where the repo is mounted at a different path (e.g. inside a build VM).
 #
 # Usage: write-vm-sh.sh   (reads VM_DIR, KERNEL, INITRD, DISK, APPEND, MEM,
-#                          CPUS, NET, ARCH from the environment)
+#                          CPUS, NET, ARCH, VM_SOURCE, VM_RELEASE from the
+#                          environment)
 
 set -eu
 
@@ -41,6 +42,8 @@ settings=
 add() { settings="$settings[ -n \"\${$1:-}\" ] || $1=$2
 "; }
 [ -z "${ARCH:-}" ] || add ARCH "$(q "$ARCH")"
+[ -z "${VM_SOURCE:-}" ] || add VM_SOURCE "$(q "$VM_SOURCE")"
+[ -z "${VM_RELEASE:-}" ] || add VM_RELEASE "$(q "$VM_RELEASE")"
 [ -z "${KERNEL:-}" ] || add KERNEL "$(path_expr "$KERNEL")"
 [ -z "${INITRD:-}" ] || add INITRD "$(path_expr "$INITRD")"
 [ -z "${DISK:-}" ] || add DISK "$(path_expr "$DISK")"
@@ -64,7 +67,7 @@ HERE=\$(cd "\$(dirname "\$0")" && pwd)
 REPO=$repo_expr
 export VM_DIR="\$HERE"
 $settings
-export ARCH KERNEL INITRD DISK APPEND MEM CPUS 2>/dev/null || true
+export ARCH VM_SOURCE VM_RELEASE KERNEL INITRD DISK APPEND MEM CPUS 2>/dev/null || true
 if [ -z "\${RUNNER:-}" ]; then
 	if [ "\$(uname -s)" = Darwin ]; then RUNNER=utm; else RUNNER=qemu; fi
 fi

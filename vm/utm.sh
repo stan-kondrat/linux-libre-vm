@@ -35,9 +35,14 @@
 #                                        linux-libre-arm64)
 #   SHARE    host folder shared with the guest (default: VM_DIR/shared;
 #            empty = no sharing)
-#   KERNEL   kernel image (required for create)
+#   VM_SOURCE  where 'create' gets the kernel and disk when KERNEL is not set:
+#            release — download a GitHub release (vm/release.sh), the default
+#            local   — this repo's build output (make build install disk-image)
+#   VM_RELEASE release tag for VM_SOURCE=release (default: latest)
+#   KERNEL   kernel image (overrides VM_SOURCE)
 #   INITRD   initrd (optional)
-#   DISK     raw disk image (optional), copied into the VM, attached as /dev/vda
+#   DISK     raw disk image, copied into the VM, attached as /dev/vda
+#            (default: from VM_SOURCE when KERNEL is not set)
 #   APPEND   kernel command line        (default: root=/dev/vda rw console=ttyAMA0)
 #   MEM      RAM in MiB                 (default: 256)
 #   CPUS     CPU cores                  (default: 1)
@@ -64,8 +69,11 @@ MEM=${MEM:-256}
 CPUS=${CPUS:-1}
 NET=${NET:-shared}
 TIMEOUT=${TIMEOUT:-60}
+VM_SOURCE=${VM_SOURCE:-release}
+VM_RELEASE=${VM_RELEASE:-latest}
 UTMCTL=${UTMCTL:-/Applications/UTM.app/Contents/MacOS/utmctl}
 HERE=$(cd "$(dirname "$0")" && pwd)
+REPO=$(cd "$HERE/.." && pwd)
 
 die() { echo "utm.sh: $*" >&2; exit 1; }
 
@@ -88,8 +96,31 @@ vm_exists() {
 	EOF
 }
 
+# Kernel and disk for 'create': an explicit KERNEL wins, otherwise VM_SOURCE
+# picks a downloaded release or the local build output
+resolve_files() {
+	[ -z "${KERNEL:-}" ] || return 0
+	case $VM_SOURCE in
+	release)
+		out=$(VM_RELEASE=$VM_RELEASE "$HERE/release.sh" fetch arm64) || exit 1
+		KERNEL=$(echo "$out" | sed -n 's/^KERNEL=//p')
+		DISK=${DISK:-$(echo "$out" | sed -n 's/^DISK=//p')}
+		;;
+	local)
+		KERNEL=$REPO/sources-build/arm64/linux-libre/arch/arm64/boot/Image.gz
+		DISK=${DISK:-$REPO/disks/disk-arm64.img}
+		[ -f "$KERNEL" ] && [ -f "$DISK" ] || die "no local build ($KERNEL, $DISK):" \
+			"build on Linux with 'make build install disk-image', or use VM_SOURCE=release"
+		;;
+	*) die "VM_SOURCE must be release or local (got '$VM_SOURCE')" ;;
+	esac
+}
+
 cmd_create() {
-	[ -n "${KERNEL:-}" ] || die "KERNEL is required"
+	# vm.sh stores what the caller chose: explicit files, else VM_SOURCE
+	# (so 'recreate' of a release VM picks up the newest release)
+	kernel_set=${KERNEL:-} disk_set=${DISK:-}
+	resolve_files
 	case $APPEND in *'"'*) die "APPEND must not contain '\"'" ;; esac
 	vm_exists && die "VM '$NAME' already exists (use 'delete' or 'recreate')"
 	kernel=$(abspath "$KERNEL")
@@ -206,9 +237,19 @@ cmd_create() {
 	fi
 	[ -z "$share" ] || cmd_share "$share"
 	if [ -n "$BUNDLE" ]; then
-		ARCH=arm64 KERNEL=$kernel INITRD=$initrd DISK=$disk VM_DIR=$VM_DIR "$HERE/write-vm-sh.sh"
+		if [ -n "$kernel_set" ]; then
+			ARCH=arm64 KERNEL=$kernel INITRD=$initrd DISK=$disk VM_DIR=$VM_DIR "$HERE/write-vm-sh.sh"
+		else
+			ARCH=arm64 KERNEL= INITRD=$initrd DISK=$disk_set VM_SOURCE=$VM_SOURCE \
+				VM_RELEASE=$VM_RELEASE VM_DIR=$VM_DIR "$HERE/write-vm-sh.sh"
+		fi
 	fi
-	echo "created $NAME${BUNDLE:+ in $VM_DIR}${share:+, shared folder $share}"
+	case $kernel_set:$VM_SOURCE in
+	:release) from="release $(basename "$(dirname "$kernel")")" ;;
+	:local) from="local build" ;;
+	*) from=$kernel ;;
+	esac
+	echo "created $NAME from $from${BUNDLE:+ in $VM_DIR}${share:+, shared folder $share}"
 	[ -z "$BUNDLE" ] || echo "manage it with $VM_DIR/vm.sh (help, start, console, ...)"
 }
 

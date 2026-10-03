@@ -208,44 +208,45 @@ jobs:
           make disk-image-${{ matrix.arch }}
           ls -lh disks/
 
-      # ── Upload artifacts ──────────────────────────────────────────────────
-      - name: Upload ${{ matrix.arch }} disk image
-        uses: actions/upload-artifact@v4
-        with:
-          name: disk-${{ matrix.arch }}
-          path: disks/disk-${{ matrix.arch }}.img
-          compression-level: 0
-
-      - name: Upload ${{ matrix.arch }} kernel
-        uses: actions/upload-artifact@v4
-        with:
-          name: kernel-${{ matrix.arch }}
-          path: |
-            ${{ matrix.arch == 'x86_64' && 'sources-build/x86_64/linux-libre/arch/x86/boot/bzImage' || 'sources-build/arm64/linux-libre/arch/arm64/boot/Image.gz' }}
-          compression-level: 0
-
-      - name: Upload ${{ matrix.arch }} rootfs metadata
+      # ── Stage release files ───────────────────────────────────────────────
+      # Final asset names, one artifact per arch: the test job boots exactly
+      # these files and the release job publishes them.
+      - name: Stage ${{ matrix.arch }} release files
         run: |
-          find rootfs/${{ matrix.arch }}/bin -type f | sort > /tmp/binlist-${{ matrix.arch }}.txt
-          du -sh rootfs/${{ matrix.arch }} > /tmp/rootsize-${{ matrix.arch }}.txt
-        continue-on-error: true
+          A=${{ matrix.arch }}
+          K=sources-build/$A/linux-libre
+          mkdir -p release
+          cp disks/disk-$A.img release/linux-libre-vm-$A.img
+          if [ "$A" = x86_64 ]; then
+            cp $K/arch/x86/boot/bzImage release/linux-libre-vmlinuz-$A
+          else
+            cp $K/arch/arm64/boot/Image.gz release/linux-libre-vmlinuz-$A
+          fi
+          cp $K/.config release/linux-libre-$A.config
+          cp $K/System.map release/linux-libre-$A.System.map
+          scripts/release-manifest.sh $A > release/MANIFEST-$A.txt
+          ls -lh release/
+          sed -n '1,/^## Files/p' release/MANIFEST-$A.txt
 
-      - name: Upload ${{ matrix.arch }} metadata
+      - name: Upload ${{ matrix.arch }} release files
         uses: actions/upload-artifact@v4
         with:
-          name: metadata-${{ matrix.arch }}
-          path: |
-            /tmp/binlist-${{ matrix.arch }}.txt
-            /tmp/rootsize-${{ matrix.arch }}.txt
+          name: release-${{ matrix.arch }}
+          path: release/
+          if-no-files-found: error
 
-  # ── QEMU Smoke Tests ──────────────────────────────────────────────────────
+  # ── Boot test ─────────────────────────────────────────────────────────────
+  # Boots the staged image under QEMU, logs in on the serial console and runs
+  # commands (vm/qemu.sh exec). Fails the run, and so blocks the release, when
+  # the system does not come up.
   test:
-    name: Test (${{ matrix.arch }})
+    name: Boot test (${{ matrix.arch }})
     needs: build
     runs-on: ubuntu-24.04
     strategy:
       matrix:
         arch: [x86_64, arm64]
+      fail-fast: false
 
     steps:
       - uses: actions/checkout@v4
@@ -256,33 +257,36 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq qemu-system-x86 qemu-system-arm
+          # KVM for the x86_64 guest (the arm64 guest is emulated: TCG)
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' |
+            sudo tee /etc/udev/rules.d/99-kvm.rules >/dev/null
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm || true
 
-      - name: Download ${{ matrix.arch }} disk image
+      - name: Download ${{ matrix.arch }} release files
         uses: actions/download-artifact@v4
         with:
-          name: disk-${{ matrix.arch }}
-          path: disks/
+          name: release-${{ matrix.arch }}
+          path: release/
 
-      - name: Download ${{ matrix.arch }} kernel
-        uses: actions/download-artifact@v4
-        with:
-          name: kernel-${{ matrix.arch }}
-          path: kernel-dl/
-
-      - name: Place kernel for QEMU
+      - name: Boot and run commands on the serial console
+        env:
+          ARCH: ${{ matrix.arch }}
+          KERNEL: release/linux-libre-vmlinuz-${{ matrix.arch }}
+          DISK: release/linux-libre-vm-${{ matrix.arch }}.img
+          SNAPSHOT: 1     # do not modify the image that gets released
+          TIMEOUT: 300    # arm64 boots under TCG emulation here
         run: |
-          if [ "${{ matrix.arch }}" = "x86_64" ]; then
-            mkdir -p sources-build/x86_64/linux-libre/arch/x86/boot
-            cp kernel-dl/bzImage sources-build/x86_64/linux-libre/arch/x86/boot/
-          else
-            mkdir -p sources-build/arm64/linux-libre/arch/arm64/boot
-            cp kernel-dl/Image.gz sources-build/arm64/linux-libre/arch/arm64/boot/
-          fi
+          vm/qemu.sh start
+          vm/qemu.sh exec 'uname -sr' 'cat /proc/cmdline' \
+            'test -w / && echo rootfs-writable' 'ls /bin | wc -l' | tee boot.log
+          vm/qemu.sh stop
+          grep -q '^Linux .*gnu' boot.log || { echo "::error::kernel did not report linux-libre"; exit 1; }
+          grep -q '^rootfs-writable' boot.log || { echo "::error::root filesystem is not writable"; exit 1; }
 
-      - name: QEMU boot smoke test (${{ matrix.arch }}) — 15s timeout
-        run: |
-          timeout 15 make qemu-${{ matrix.arch }} 2>&1 || true
-        continue-on-error: true
+      - name: QEMU log
+        if: failure()
+        run: cat build/qemu/*/qemu.log || true
 
   # ── Release ────────────────────────────────────────────────────────────────
   release:
@@ -295,77 +299,114 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: false
 
-      - name: Download all artifacts
+      - name: Download release files
         uses: actions/download-artifact@v4
         with:
-          path: release-artifacts/
+          pattern: release-*
+          path: release/
           merge-multiple: true
 
-      - name: Prepare release assets
+      # The images contain GPL software (Linux-libre, bash, coreutils, ...):
+      # publish the exact corresponding source next to them. GitHub's own
+      # "Source code" archives do not include submodules.
+      - name: Fetch sources
+        run: scripts/fetch-submodules.sh
+
+      - name: Source tarball
         run: |
-          ls -la release-artifacts/
-          # Rename to descriptive filenames
-          cp release-artifacts/disk-x86_64.img linux-libre-vm-x86_64.img || true
-          cp release-artifacts/disk-arm64.img linux-libre-vm-arm64.img || true
-          cp release-artifacts/bzImage linux-libre-vmlinuz-x86_64 || true
-          cp release-artifacts/Image.gz linux-libre-vmlinuz-arm64 || true
-          ls -lh linux-libre-*
+          tar --exclude=.git --exclude=sources/toolchain \
+            --sort=name --owner=0 --group=0 --numeric-owner \
+            --mtime="@$(git log -1 --format=%ct)" \
+            --transform "s|^|linux-libre-vm-${GITHUB_REF_NAME}/|" \
+            -cf - Makefile README.md mk scripts templates kernel-*.config \
+                  sources sources-patches vm docs |
+            xz -T0 -6 > release/linux-libre-vm-src-${GITHUB_REF_NAME}.tar.xz
+
+      - name: Compress disk images
+        run: xz -T0 -9 -k release/linux-libre-vm-*.img
 
       - name: Create checksums
+        working-directory: release
         run: |
-          sha256sum linux-libre-*.img linux-libre-vmlinuz-* > SHA256SUMS
+          sha256sum * > SHA256SUMS
           cat SHA256SUMS
+          ls -lh
 
       - name: Generate release notes
         run: |
-          cat > release-notes.md << 'EOF'
-          ## Super Minimal Linux Libre
+          T=${GITHUB_REF_NAME}
+          cat > release-notes.md <<EOF
+          ## Super Minimal Linux Libre ${T}
 
-          Build of the minimal GNU/Linux system with Linux-libre kernel.
+          Minimal GNU/Linux system: Linux-libre kernel, GNU userland, glibc, runit.
+          Both images boot straight to a root shell on the serial console and
+          configure \`eth0\` by DHCP.
+
+          ### Run it
+
+          With this repository (UTM on Apple Silicon, or QEMU anywhere): the VM
+          scripts download this release by default.
+
+          \`\`\`bash
+          make utm-create utm-start utm-console        # macOS + UTM, arm64
+          make qemu-start qemu-console                 # QEMU, arm64 (QEMU_ARCH=x86_64 for the other)
+          \`\`\`
+
+          With plain QEMU (\`unxz\` the images first, or use the uncompressed ones):
+
+          \`\`\`bash
+          # x86_64 (q35, virtio-pci)
+          qemu-system-x86_64 -M q35 -m 256 -nographic -nodefaults -serial mon:stdio \\
+            -kernel linux-libre-vmlinuz-x86_64 -append "root=/dev/vda rw console=ttyS0" \\
+            -drive file=linux-libre-vm-x86_64.img,format=raw,if=none,id=drive0 \\
+            -device virtio-blk-pci,drive=drive0 \\
+            -netdev user,id=net0 -device virtio-net-pci,netdev=net0
+
+          # arm64 (virt, virtio-mmio: the kernel has no PCI)
+          qemu-system-aarch64 -M virt -cpu cortex-a57 -m 256 -nographic -nodefaults -serial mon:stdio \\
+            -kernel linux-libre-vmlinuz-arm64 -append "root=/dev/vda rw console=ttyAMA0" \\
+            -drive file=linux-libre-vm-arm64.img,format=raw,if=none,id=drive0 \\
+            -device virtio-blk-device,drive=drive0 \\
+            -netdev user,id=net0 -device virtio-net-device,netdev=net0
+          \`\`\`
+
+          Add \`-accel kvm -cpu host\` (Linux, same architecture) or \`-accel hvf -cpu host\`
+          (macOS, arm64) for hardware acceleration. Quit with Ctrl-a x.
 
           ### Assets
 
           | File | Description |
           |------|-------------|
-          | `linux-libre-vm-x86_64.img` | x86_64 disk image (ext4, ~84 MB) |
-          | `linux-libre-vm-arm64.img` | arm64 disk image (ext4, ~72 MB) |
-          | `linux-libre-vmlinuz-x86_64` | x86_64 kernel bzImage |
-          | `linux-libre-vmlinuz-arm64` | arm64 kernel Image.gz |
-          | `SHA256SUMS` | Checksums for all assets |
+          | \`linux-libre-vm-{x86_64,arm64}.img.xz\` | root filesystem: raw ext4, no partition table (xz) |
+          | \`linux-libre-vm-{x86_64,arm64}.img\` | the same, uncompressed |
+          | \`linux-libre-vmlinuz-{x86_64,arm64}\` | kernel (x86_64 bzImage, arm64 Image.gz), booted directly |
+          | \`linux-libre-{x86_64,arm64}.config\` | kernel configuration |
+          | \`linux-libre-{x86_64,arm64}.System.map\` | kernel symbol map (for debugging) |
+          | \`MANIFEST-{x86_64,arm64}.txt\` | upstream versions, toolchain, host libraries, file list |
+          | \`linux-libre-vm-src-${T}.tar.xz\` | complete corresponding source: all upstream sources, patches and build system |
+          | \`SHA256SUMS\` | checksums of all assets |
 
-          ### Usage
+          glibc, libgcc and the other runtime libraries are copied from the Ubuntu
+          24.04 build host; \`MANIFEST-*.txt\` lists their Ubuntu packages and
+          versions, whose source is available from Ubuntu.
 
-          ```bash
-          # x86_64
-          qemu-system-x86_64 -M microvm -m 256 -nographic \
-            -kernel linux-libre-vmlinuz-x86_64 \
-            -drive file=linux-libre-vm-x86_64.img,format=raw,if=none,id=drive0 \
-            -device virtio-blk-device,drive=drive0 \
-            -nic user,model=virtio-net-device \
-            -append "root=/dev/vda rw console=ttyS0"
+          ### Upstream versions
 
-          # arm64
-          qemu-system-aarch64 -M virt -cpu cortex-a57 -m 256 -nographic \
-            -kernel linux-libre-vmlinuz-arm64 \
-            -drive file=linux-libre-vm-arm64.img,format=raw,if=none,id=drive0 \
-            -device virtio-blk-device,drive=drive0 \
-            -nic user,model=virtio-net-device \
-            -append "root=/dev/vda rw console=ttyAMA0"
-          ```
+          \`\`\`
+          $(sed -n '/^## Upstream sources/,/^$/p' release/MANIFEST-x86_64.txt | sed '1d;$d')
+          \`\`\`
           EOF
+          cat release-notes.md
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           name: Release ${{ github.ref_name }}
           body_path: release-notes.md
-          files: |
-            linux-libre-vm-x86_64.img
-            linux-libre-vm-arm64.img
-            linux-libre-vmlinuz-x86_64
-            linux-libre-vmlinuz-arm64
-            SHA256SUMS
+          files: release/*
           draft: false
           prerelease: false
           generate_release_notes: false

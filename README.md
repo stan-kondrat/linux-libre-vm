@@ -27,8 +27,11 @@ make qemu-x86_64        # boot x86_64 in QEMU (Ctrl-C to exit)
 make qemu-arm64         # boot arm64 in QEMU (Ctrl-C to exit)
 ```
 
-On an Apple Silicon Mac, the arm64 image runs in UTM with hardware
-virtualization: `make utm-create utm-start utm-console`. See [docs/utm.md](docs/utm.md).
+To just run it, nothing has to be built: the VM targets download the latest
+[release](https://github.com/stan-kondrat/linux-libre-vm/releases) by default
+(`VM_SOURCE=local` uses your own build). On an Apple Silicon Mac, the arm64
+image runs in UTM with hardware virtualization:
+`make utm-create utm-start utm-console`. See [docs/utm.md](docs/utm.md).
 With plain QEMU on any host (including inside a Linux build VM):
 `make qemu-start qemu-console`. See [docs/qemu.md](docs/qemu.md).
 

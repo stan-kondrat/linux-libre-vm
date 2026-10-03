@@ -7,12 +7,17 @@
 #   make qemu-start qemu-console        make QEMU_ARCH=x86_64 qemu-start
 # For a one-off foreground boot use `make qemu-arm64` / `make qemu-x86_64`.
 
-# State (pid, log) and the shared folder live in VM_DIR (see mk/12-utm.mk).
+# State (pid, log, disk copy) and the shared folder live in VM_DIR (see
+# mk/12-utm.mk). Kernel and disk: the latest GitHub release by default,
+# VM_SOURCE=local for this repo's build output, or QEMU_KERNEL/QEMU_IMAGE.
 VM_DIR      ?= vm_tmp/linux-libre-default
+VM_SOURCE   ?= release
+VM_RELEASE  ?= latest
 QEMU_ARCH   ?= $(or $(ARCH),arm64)
-QEMU_KERNEL ?= $(KERNEL_$(QEMU_ARCH))
-QEMU_IMAGE  ?= $(QEMU_DISK_$(QEMU_ARCH))
-QEMU_VM     := ARCH="$(QEMU_ARCH)" VM_DIR="$(VM_DIR)" KERNEL="$(QEMU_KERNEL)" DISK="$(QEMU_IMAGE)" vm/qemu.sh
+QEMU_KERNEL ?=
+QEMU_IMAGE  ?=
+QEMU_VM     := ARCH="$(QEMU_ARCH)" VM_DIR="$(VM_DIR)" VM_SOURCE="$(VM_SOURCE)" VM_RELEASE="$(VM_RELEASE)" \
+               KERNEL="$(QEMU_KERNEL)" DISK="$(QEMU_IMAGE)" vm/qemu.sh
 
 .PHONY: qemu-start qemu-console qemu-stop qemu-status qemu-delete qemu-test-alpine
 

@@ -49,6 +49,13 @@ make qemu-x86_64
 make qemu-arm64 BOOT_DIAG=1   # adds boot.diag=1 (boot diagnostics in runit stage 1)
 ```
 
+These boot the local build output. The background targets below download
+the latest GitHub release by default instead, like the UTM runner (see
+[utm.md](utm.md#kernel-and-disk-release-or-local-build)): `VM_SOURCE=local`
+uses the build output, `VM_RELEASE=<tag>` picks a release. A release VM gets
+its own copy of the disk in `VM_DIR` (`recreate` resets it and moves to the
+newest release); the downloaded image stays untouched.
+
 Background, like the UTM runner, with state and shared folder in `VM_DIR`
 (default `vm_tmp/linux-libre-default`):
 
@@ -100,9 +107,11 @@ ARCH=arm64 KERNEL=Image.gz DISK=disk-arm64.img vm/qemu.sh args   # show the QEMU
 | `VM_DIR` | — (`make`: `vm_tmp/linux-libre-default`) | directory for state (pid, log) and `shared/`; unset = `build/qemu/$NAME/`, no sharing |
 | `NAME` | basename of `VM_DIR`, else `linux-libre-$ARCH` | instance name |
 | `SHARE` | `VM_DIR/shared` | host folder shared with the guest; empty = no sharing |
-| `KERNEL` | — | kernel image (required) |
+| `VM_SOURCE` | `release` | kernel + disk: `release` (download, disk copied to `VM_DIR`) or `local` (build output, disk used in place) |
+| `VM_RELEASE` | `latest` | release tag; the one found first is kept until `recreate` |
+| `KERNEL` | from `VM_SOURCE` | kernel image; set it to use any file |
 | `INITRD` | — | optional initrd |
-| `DISK` | — | raw disk image, attached as `/dev/vda` |
+| `DISK` | from `VM_SOURCE` | raw disk image, attached as `/dev/vda` |
 | `APPEND` | `root=/dev/vda rw console=<ttyAMA0/ttyS0>` | kernel command line |
 | `MEM` / `CPUS` | `256` / `1` | RAM (MiB) / cores |
 | `NET` | `user` | `user` (NAT) or `none` |

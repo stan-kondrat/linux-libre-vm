@@ -33,18 +33,33 @@ Requirements: UTM 5.x in `/Applications` (tested with 5.0.4 and 5.0.6). The firs
 
 ```bash
 make utm-test-alpine   # optional: check the runner works on this Mac
-make utm-create        # VM "linux-libre-default" in vm_tmp/linux-libre-default, from the local build output
+make utm-create        # VM "linux-libre-default" in vm_tmp/linux-libre-default, latest release
 make utm-start
 make utm-console       # serial console; Ctrl-] quits (the VM keeps running)
 make utm-list          # all UTM VMs: name, status, bundle path
 make utm-delete
 ```
 
-With release files instead of a local build:
+### Kernel and disk: release or local build
+
+Nothing has to be built: by default `create` downloads the latest
+[GitHub release](https://github.com/stan-kondrat/linux-libre-vm/releases)
+with `vm/release.sh`. The files are checked against the release's
+`SHA256SUMS` and cached in `vm/cache/release/<tag>/` (git-ignored), so later
+VMs are created offline. Keep that directory: the VM boots its kernel from
+there.
 
 ```bash
-make utm-create UTM_KERNEL=linux-libre-vmlinuz-arm64 UTM_DISK=linux-libre-vm-arm64.img
+make releases                               # published releases, and which are cached
+make utm-create VM_RELEASE=v1.0             # a given release (default: latest)
+make utm-create VM_SOURCE=local             # this repo's build output (built on Linux)
+make utm-create UTM_KERNEL=Image.gz UTM_DISK=disk.img   # any files
 ```
+
+`vm.sh` remembers the choice: for a release VM, `vm.sh recreate` creates it
+again from the newest release (or the pinned `VM_RELEASE`); for a local one,
+from the rebuilt image. Set `GH_TOKEN` if the GitHub API rate limit is hit,
+and `VM_REPO=owner/repo` to download from a fork.
 
 The Linux build targets need a Linux host; on macOS only the `utm-*` targets
 are usable.
@@ -99,9 +114,11 @@ VM_DIR=vm_tmp/vm2 vm/utm.sh exec 'uname -a' 'df -h'   # log in as root, run, pri
 | `VM_DIR` | — (`make`: `vm_tmp/linux-libre-default`) | directory for the bundle and `shared/`; unset = UTM's own storage, no sharing |
 | `NAME` | basename of `VM_DIR`, else `linux-libre-arm64` | VM name in UTM |
 | `SHARE` | `VM_DIR/shared` | host folder shared with the guest; empty = no sharing |
-| `KERNEL` | — | kernel image (required for `create`) |
+| `VM_SOURCE` | `release` | where `create` gets kernel + disk: `release` (download) or `local` (build output) |
+| `VM_RELEASE` | `latest` | release tag for `VM_SOURCE=release` |
+| `KERNEL` | from `VM_SOURCE` | kernel image; set it to use any file |
 | `INITRD` | — | optional initrd |
-| `DISK` | — | raw disk image, copied into the VM, attached as `/dev/vda` |
+| `DISK` | from `VM_SOURCE` | raw disk image, copied into the VM, attached as `/dev/vda` |
 | `APPEND` | `root=/dev/vda rw console=ttyAMA0` | kernel command line |
 | `MEM` / `CPUS` | `256` / `1` | RAM (MiB) / cores (the kernel is built without SMP) |
 | `NET` | `shared` | UTM network mode: `shared`, `emulated`, `host`, `none` |
