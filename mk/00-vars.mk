@@ -113,5 +113,9 @@ USERLAND_CONFIG := \
 procps-ng_CONFIGURE_arm64 := --without-ncurses
 # util-linux: skip chown/chgrp/setuid in "make install" (needs root; the build
 # runs as a normal user and installs into a DESTDIR)
-util-linux_CONFIGURE_x86_64 := --disable-makeinstall-chown --disable-makeinstall-setuid
-util-linux_CONFIGURE_arm64  := --disable-makeinstall-chown --disable-makeinstall-setuid
+# No Python bindings (the image has no Python). Cross builds: no ncurses either,
+# configure would find the build host's (pkg-config) and fail to link -ltinfo
+UTIL_LINUX_CONFIGURE = --disable-makeinstall-chown --disable-makeinstall-setuid \
+    --without-python $(if $(CROSS_$(1)),--without-ncursesw --without-ncurses --without-tinfo)
+util-linux_CONFIGURE_x86_64 := $(call UTIL_LINUX_CONFIGURE,x86_64)
+util-linux_CONFIGURE_arm64  := $(call UTIL_LINUX_CONFIGURE,arm64)
