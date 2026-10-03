@@ -30,7 +30,6 @@ git submodule status | grep -v ' sources/toolchain/' || true
 echo
 echo "## Toolchain"
 $CC --version | head -1
-command -v ldd >/dev/null && ldd --version | head -1 || true
 
 # Libraries in the image that came from the build host (glibc, libgcc,
 # ncurses, ...): name the distribution package and version they belong to
@@ -44,7 +43,8 @@ if command -v dpkg >/dev/null; then
 	esac
 	for f in $(cd "$ROOT" && find lib lib64 usr/lib -maxdepth 1 -name '*.so*' 2>/dev/null | sort); do
 		b=$(basename "$f")
-		pkgs=$(dpkg -S "/$b" 2>/dev/null | sed 's/: .*//; s/, /\n/g' | sed 's/:.*//' | sort -u)
+		# "*/name": a pattern starting with "/" would be an exact path for dpkg
+		pkgs=$(dpkg -S "*/$b" 2>/dev/null | sed 's/: .*//; s/, /\n/g' | sed 's/:.*//' | sort -u)
 		if [ -n "$want" ]; then
 			pkg=$(printf '%s\n' "$pkgs" | grep -e "$want" | head -1)
 		else
