@@ -60,6 +60,7 @@ if [ -n "${VM_DIR:-}" ]; then
 	VM_DIR=$(cd "$VM_DIR" && pwd)
 	NAME=${NAME:-$(basename "$VM_DIR")}
 	BUNDLE=$VM_DIR/$NAME.utm
+	SHARE_GIVEN=${SHARE+x}         # set explicitly: recorded in vm.sh
 	SHARE=${SHARE-$VM_DIR/shared}  # unset: default; set but empty: no sharing
 fi
 SHARE=${SHARE:-}
@@ -154,7 +155,12 @@ cmd_create() {
 			set uefi of cfg to false
 			-- VirtFS: UTM adds "-fsdev local,id=virtfs0,path=<shared dir>" (the
 			-- dir itself is set per registration, see cmd_share) plus a PCI
-			-- virtio-9p device; we add an mmio one on the same fsdev below
+			-- virtio-9p device. That gives QEMU sandbox access to the folder,
+			-- but UTM's fsdev uses security_model=mapped-xattr, which makes
+			-- symlinks created on the Mac unreadable in the guest ("Too many
+			-- levels of symbolic links") and keeps guest-side modes apart from
+			-- the real ones. We add our own fsdev on the same folder with
+			-- security_model=none (host files as they are) and an mmio device
 			if sharePath is "" then
 				set directory share mode of cfg to none
 			else
@@ -207,8 +213,10 @@ cmd_create() {
 					{argument string:"virtio-blk-device,drive=drive" & driveId}}
 			end if
 			if sharePath is not "" then
-				set qargs to qargs & {{argument string:"-device"}, ¬
-					{argument string:"virtio-9p-device,fsdev=virtfs0,mount_tag=share"}}
+				set qargs to qargs & {{argument string:"-fsdev"}, ¬
+					{argument string:"local,id=share1,path=" & sharePath & ",security_model=none"}, ¬
+					{argument string:"-device"}, ¬
+					{argument string:"virtio-9p-device,fsdev=share1,mount_tag=share"}}
 			end if
 			set qemu additional arguments of cfg to qargs
 			update configuration of vm with cfg
@@ -237,6 +245,8 @@ cmd_create() {
 	fi
 	[ -z "$share" ] || cmd_share "$share"
 	if [ -n "$BUNDLE" ]; then
+		# Record an explicitly chosen shared folder (empty = none) for recreate
+		if [ -n "${SHARE_GIVEN:-}" ]; then export SHARE_SAVE=${share:-none}; fi
 		if [ -n "$kernel_set" ]; then
 			ARCH=arm64 KERNEL=$kernel INITRD=$initrd DISK=$disk VM_DIR=$VM_DIR "$HERE/write-vm-sh.sh"
 		else

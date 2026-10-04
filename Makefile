@@ -20,3 +20,4 @@ include mk/10-disk.mk
 include mk/11-test.mk
 include mk/12-utm.mk
 include mk/13-qemu.mk
+include mk/14-toolchain.mk

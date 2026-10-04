@@ -49,3 +49,28 @@
 [submodule "sources/gnulib"]
 	path = sources/gnulib
 	url = https://git.savannah.gnu.org/git/gnulib.git
+[submodule "sources/toolchain/binutils"]
+	path = sources/toolchain/binutils
+	url = https://sourceware.org/git/binutils-gdb.git
+	ref = refs/tags/binutils-2_47
+	commit = 6ce87bbc521cf46eaee9a1f7ef61cee2cdfb3e32
+[submodule "sources/toolchain/gcc"]
+	path = sources/toolchain/gcc
+	url = https://gcc.gnu.org/git/gcc.git
+	ref = refs/tags/releases/gcc-15.3.0
+	commit = 4db0e8df15bef836558857c291c323add11d035c
+[submodule "sources/toolchain/glibc"]
+	path = sources/toolchain/glibc
+	url = https://sourceware.org/git/glibc.git
+	ref = refs/tags/glibc-2.43
+	commit = f762ccf84f122d1354f103a151cba8bde797d521
+[submodule "sources/toolchain/bc"]
+	path = sources/toolchain/bc
+	url = https://github.com/gavinhoward/bc.git
+	ref = refs/tags/7.1.0
+	commit = 70c51d95e02d20fc3fc82791dc3f1aa0e9d47f0d
+[submodule "sources/toolchain/perl"]
+	path = sources/toolchain/perl
+	url = https://github.com/Perl/perl5.git
+	ref = refs/tags/v5.44.0
+	commit = e634cc838fb1785dfafb5d13b52807ea16b5c52c

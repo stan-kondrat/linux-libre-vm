@@ -12,8 +12,12 @@
 # Submodules are fetched one at a time, with retries. The only nested
 # submodule the build needs is tar's paxutils.
 #
-# Usage: scripts/fetch-submodules.sh [path...]   (default: all submodules)
+# Usage: scripts/fetch-submodules.sh [path...]   (default: all submodules
+#                                                 except sources/toolchain/*)
 #        scripts/fetch-submodules.sh sources/tar/paxutils   (nested only)
+#
+# The toolchain sources (gcc, glibc, ... under sources/toolchain/) are large
+# and only needed for the self-hosting toolchain: scripts/fetch-toolchain.sh.
 # ═════════════════════════════════════════════════════════════════════════════
 set -euo pipefail
 
@@ -43,7 +47,9 @@ fetch_pinned() {
   name=$(git -C "$top" config -f .gitmodules --get-regexp '\.path$' |
     awk -v p="$sm" '$2 == p { sub(/^submodule\./, "", $1); sub(/\.path$/, "", $1); print $1 }')
   url=$(git -C "$top" config -f .gitmodules "submodule.$name.url")
-  sha=$(git -C "$top" rev-parse "HEAD:$sm")
+  # Pinned commit from the index (also works before the submodule is committed)
+  sha=$(git -C "$top" ls-files -s -- "$sm" | awk '$1 == "160000" { print $2 }')
+  [ -n "$sha" ] || { echo "ERROR: $sm is not a submodule in $top" >&2; return 1; }
 
   if [ "$(git -C "$dir" rev-parse -q --verify HEAD 2>/dev/null)" = "$sha" ]; then
     echo "=== $dir: already at ${sha:0:12}"
@@ -69,7 +75,8 @@ fetch_pinned() {
 if [ $# -gt 0 ]; then
   paths=("$@")
 else
-  paths=($(git config -f .gitmodules --get-regexp '\.path$' | awk '{ print $2 }'))
+  paths=($(git config -f .gitmodules --get-regexp '\.path$' | awk '{ print $2 }' |
+    grep -v '^sources/toolchain/'))
 fi
 
 for sm in "${paths[@]}"; do

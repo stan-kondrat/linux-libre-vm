@@ -1,0 +1,13 @@
+#!/bin/sh
+# Root shell on the serial console (started by agetty -n -l, see
+# /etc/service/getty-*/run).
+#
+# agetty starts it with an almost empty environment, and bash's built-in
+# default PATH ends in "." — which, among other things, makes gcc look for
+# cc1 relative to the current directory. Set a proper environment first.
+
+export PATH=/usr/local/bin:/usr/bin:/usr/sbin:/bin:/sbin
+export HOME=/root
+export TERM="${TERM:-vt100}"
+cd "$HOME" 2>/dev/null || cd /
+exec /bin/bash -l

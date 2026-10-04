@@ -26,3 +26,6 @@ disks/
 vm/cache/
 
 vm_tmp/
+
+# Toolchain release tarballs (scripts/fetch-toolchain.sh)
+sources/toolchain/dist/

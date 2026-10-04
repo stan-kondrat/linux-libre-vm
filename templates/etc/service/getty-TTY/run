@@ -8,4 +8,4 @@
 # runsv still supervises agetty.
 
 PATH=/bin
-exec setsid -c agetty -L -n -l /bin/bash 115200 TTY vt100 </dev/TTY
+exec setsid -c agetty -L -n -l /bin/console-shell 115200 TTY vt100 </dev/TTY

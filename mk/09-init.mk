@@ -35,7 +35,7 @@ install-init-$(1):
 	cp "$$$${T}/etc/service/dhcpcd/log/run" "$$$${DD}/log/run"; \
 	chmod 755 "$$$${DD}/run" "$$$${DD}/log/run"; \
 	ln -sf /bin/bash "$$$${R}/bin/sh" 2>/dev/null || true; \
-	for prog in poweroff reboot halt shutdown; do \
+	for prog in poweroff reboot halt shutdown console-shell; do \
 	  cp "$$$${T}/bin/$$$${prog}" "$$$${R}/bin/$$$${prog}"; \
 	  chmod 755 "$$$${R}/bin/$$$${prog}"; \
 	done; \

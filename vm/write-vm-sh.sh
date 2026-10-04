@@ -22,6 +22,7 @@ q() { printf "'%s'" "$(printf %s "$1" | sed "s/'/'\\\\''/g")"; }
 # Expression for a path: relative to the repo when inside it
 path_expr() {
 	case $1 in
+	"$REPO") printf '"$REPO"' ;;
 	"$REPO"/*) printf '"$REPO"/%s' "$(q "${1#"$REPO"/}")" ;;
 	*) q "$1" ;;
 	esac
@@ -50,6 +51,14 @@ add() { settings="$settings[ -n \"\${$1:-}\" ] || $1=$2
 [ -z "${APPEND:-}" ] || add APPEND "$(q "$APPEND")"
 [ -z "${MEM:-}" ] || add MEM "$(q "$MEM")"
 [ -z "${CPUS:-}" ] || add CPUS "$(q "$CPUS")"
+# SHARE: only when chosen explicitly at create time ("none" = no sharing)
+case ${SHARE_SAVE:-} in
+"") ;;
+none) settings="$settings[ -n \"\${SHARE+x}\" ] || SHARE=
+" ;;
+*) settings="$settings[ -n \"\${SHARE+x}\" ] || SHARE=$(path_expr "$SHARE_SAVE")
+" ;;
+esac
 
 tmp=$VM_DIR/.vm.sh.$$
 cat >"$tmp" <<EOF
@@ -67,7 +76,7 @@ HERE=\$(cd "\$(dirname "\$0")" && pwd)
 REPO=$repo_expr
 export VM_DIR="\$HERE"
 $settings
-export ARCH VM_SOURCE VM_RELEASE KERNEL INITRD DISK APPEND MEM CPUS 2>/dev/null || true
+export ARCH VM_SOURCE VM_RELEASE KERNEL INITRD DISK APPEND MEM CPUS SHARE 2>/dev/null || true
 if [ -z "\${RUNNER:-}" ]; then
 	if [ "\$(uname -s)" = Darwin ]; then RUNNER=utm; else RUNNER=qemu; fi
 fi
