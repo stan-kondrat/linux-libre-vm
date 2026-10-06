@@ -15,13 +15,38 @@ the **host's own architecture only** (arm64 inside `void-dev`).
 | Linux UAPI headers | from `sources/linux-libre` | `make headers_install` | glibc and userspace headers include them |
 | glibc | 2.43 | git `sources/toolchain/glibc` | headers, `crt*.o`, `libc.so` script — and the runtime |
 | binutils | 2.47 | git `sources/toolchain/binutils` | `as`, `ld`, `ar`, `objcopy`, `nm`, … |
-| gcc (C, C++) | 15.3.0 | git `sources/toolchain/gcc` (+ gmp/mpfr/mpc/isl via gcc's `download_prerequisites`, SHA-512 checked) | the compiler; C++ so gcc can later rebuild itself |
+| gcc (C, C++) | 15.3.0 | git `sources/toolchain/gcc` (+ gmp/mpfr/mpc/isl: the versions gcc's `download_prerequisites` names, fetched by `scripts/fetch-toolchain.sh`, SHA-512 checked) | the compiler; C++ so gcc can later rebuild itself |
 | GNU make | 4.4.1 | tarball, SHA-256 pinned | kernel build |
 | m4 | 1.4.21 | tarball | bison runs m4 |
 | bison | 3.8.2 | tarball | kernel (kconfig, dtc) |
 | flex | 2.6.4 | tarball | kernel (kconfig, dtc) |
 | bc | 7.1.0 (Gavin Howard's) | git `sources/toolchain/bc` | kernel (`timeconst`) |
 | perl | 5.44.0 | git `sources/toolchain/perl` | kernel build scripts |
+| zlib | 1.3.2 | tarball, SHA-256 pinned | Python's `zlib` module; `libz` for general use |
+| bzip2 | 1.0.8 | tarball, SHA-256 pinned | Python's `bz2` module (Node's configure needs it); `bzip2` command |
+| Python | 3.14.8 | git `sources/toolchain/python` | glibc's build, Node's build, general use |
+| Node.js | 26.10.0 | git `sources/toolchain/node` (V8, ICU, OpenSSL, zlib, npm bundled) | general use |
+
+Python links zlib and bzip2 statically (its modules work on a build host
+without them) and is built without the modules whose libraries the image
+lacks (OpenSSL, libffi, SQLite, xz, zstd, readline), and without pip. Node needs no
+system libraries beyond glibc and libstdc++; its binary is stripped.
+Some V8 compile jobs need about 2.4 GB of memory, so the Node build runs one
+job per 2.5 GB of RAM (at most one per CPU): give a VM that builds it 8 GB
+(`MEM=8192`); with 4 GB it builds with one job.
+
+Tested in the `selfhost` VM (2026-10-04): Node 26.10.0 (V8 14.6, full ICU
+78.3, npm 11.19.1) and Python 3.14.8 (with `zlib` and `bz2`) build and run.
+Node is the longest step of the whole toolchain — about 4,700 compile jobs,
+several hours in a 4–8 vCPU VM; the stripped `node` binary is 114 MB.
+
+The dev image also gets `/usr/bin/env` (a link to `/bin/env`), which npm and
+many scripts use in their `#!` line.
+
+binutils and gcc are configured `--without-debuginfod --without-zstd`: left
+to auto-detection they link whatever the build host has, and a dev image built
+on Void got a `readelf`/`objdump` needing `libdebuginfod.so.1`, which the image
+does not contain. Rebuild binutils and gcc (`rm` their stamps) to pick this up.
 
 GNU make, m4, bison and flex come from release tarballs because building them
 from git requires a gnulib bootstrap matched to each release.
@@ -135,4 +160,8 @@ then `make toolchain install-dev disk-image-dev TOOLCHAIN_WORK=/var/tmp/toolchai
 - Build the userland packages inside the VM the same way (stage 1).
 - Rebuild the toolchain with itself (stage 2) — then the host toolchain is no
   longer involved.
-- Move all of this into a declarative (JSON) build description.
+- Cross toolchains for other targets: [cross-toolchains.md](cross-toolchains.md).
+- The declarative package/build description is a separate project,
+  [eclogite-linux](https://github.com/stan-kondrat/eclogite-linux). It does not
+  build toolchains itself; it can use this project's dev image as a local build
+  runtime.

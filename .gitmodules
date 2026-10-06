@@ -74,3 +74,13 @@
 	url = https://github.com/Perl/perl5.git
 	ref = refs/tags/v5.44.0
 	commit = e634cc838fb1785dfafb5d13b52807ea16b5c52c
+[submodule "sources/toolchain/python"]
+	path = sources/toolchain/python
+	url = https://github.com/python/cpython.git
+	ref = refs/tags/v3.14.8
+	commit = 8e6e75d9102e39bed2a2b279203a396741180f12
+[submodule "sources/toolchain/node"]
+	path = sources/toolchain/node
+	url = https://github.com/nodejs/node.git
+	ref = refs/tags/v26.10.0
+	commit = 151845ab90d3926ceb36eedf1eade09619c3adc9
