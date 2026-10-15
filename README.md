@@ -202,6 +202,10 @@ sources/<pkg>  ──copy+patch──→  sources-patched/<pkg>/  (once)
 
 coreutils bash grep sed gawk findutils diffutils gzip tar vim iproute2 procps-ng util-linux runit dhcpcd openssl openssh
 
+The list is `USERLAND_PKGS` in `mk/00-vars.mk`. Per-arch facts (serial
+console, kernel image, dynamic linker) are one table there too; the build,
+install, kernel, init and QEMU rules are macros over it.
+
 ### SSH
 
 Both images run an OpenSSH server (OpenSSL's libcrypto built from the pinned

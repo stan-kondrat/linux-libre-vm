@@ -4,6 +4,4 @@
 
 PATH=/bin
 
-# Brief pause to let devtmpfs settle before starting services
-sleep 1
 exec runsvdir -P /etc/service 2>/dev/null

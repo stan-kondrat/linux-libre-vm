@@ -66,6 +66,37 @@ ROOTFS_arm64            := $(CURDIR)/rootfs/arm64
 BUILD_DIR_x86_64        := $(CURDIR)/sources-build/x86_64
 BUILD_DIR_arm64         := $(CURDIR)/sources-build/arm64
 
+# ── Packages ───────────────────────────────────────────────────────────────
+# Userland packages, each a submodule sources/<pkg> with build rules in
+# mk/04-build-rules.mk, declared per target in mk/05-packages.mk
+USERLAND_PKGS := coreutils bash grep sed gawk findutils diffutils gzip tar vim \
+                 iproute2 procps-ng util-linux runit dhcpcd openssl openssh
+
+# ── Per-arch facts ─────────────────────────────────────────────────────────
+# Everything that differs between the targets lives here; the rules are
+# macros over $(TARGETS) and look these up by arch name.
+#   TTY_<a>           serial console      KARCH_<a>         kernel ARCH=
+#   KERNEL_TARGET_<a> kernel make target  KERNEL_IMAGE_<a>  its path in the tree
+#   LDSO_<a>          dynamic linker      MULTIARCH_<a>     Debian library dir name
+#   OPENSSL_TARGET_<a> OpenSSL Configure target
+TTY_x86_64            := ttyS0
+TTY_arm64             := ttyAMA0
+KARCH_x86_64          := x86_64
+KARCH_arm64           := arm64
+KERNEL_TARGET_x86_64  := bzImage
+KERNEL_TARGET_arm64   := Image.gz
+KERNEL_IMAGE_x86_64   := arch/x86/boot/bzImage
+KERNEL_IMAGE_arm64    := arch/arm64/boot/Image.gz
+LDSO_x86_64           := /lib64/ld-linux-x86-64.so.2
+LDSO_arm64            := /lib/ld-linux-aarch64.so.1
+MULTIARCH_x86_64      := x86_64-linux-gnu
+MULTIARCH_arm64       := aarch64-linux-gnu
+OPENSSL_TARGET_x86_64 := linux-x86_64
+OPENSSL_TARGET_arm64  := linux-aarch64
+
+# Built kernel image of an arch: $(call KERNEL_OUT,<arch>)
+KERNEL_OUT = $(BUILD_DIR_$(1))/linux-libre/$(KERNEL_IMAGE_$(1))
+
 # ── Shared directories ─────────────────────────────────────────────────────
 SOURCES_DIR          := $(CURDIR)/sources
 SOURCES_PATCHED_DIR  := $(CURDIR)/sources-patched

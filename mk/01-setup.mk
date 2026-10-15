@@ -74,8 +74,7 @@ endif
 	@echo ""
 endif
 	@echo "=== Checking submodules ==="
-	@$(foreach pkg,bash coreutils grep sed gawk findutils diffutils gzip tar vim \
-	            iproute2 procps-ng util-linux runit dhcpcd openssl openssh,\
+	@$(foreach pkg,$(USERLAND_PKGS),\
 	  [ -d "$(SOURCES_DIR)/$(pkg)" ] && echo "  $(pkg): OK" || \
 	    (echo "  $(pkg): MISSING — run scripts/fetch-submodules.sh" && exit 1);)
 	@[ -d "$(GNULIB_DIR)" ] && echo "  gnulib: OK" || \

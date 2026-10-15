@@ -50,6 +50,28 @@ jobs:
         with:
           submodules: false
 
+      # ── Cache: submodule checkouts ────────────────────────────────────────
+      # sources/<pkg> (shallow .git + files) of every base submodule, keyed on
+      # their pinned commits. fetch-submodules.sh skips a submodule already at
+      # its pinned commit, so a hit fetches nothing; an older cache (restore-
+      # keys) fetches only the submodules whose commit changed. Spares the
+      # flaky upstream hosts (GNU HTTP 429/500, FSFLA git://) most runs.
+      - name: Submodule cache key
+        id: submodule-key
+        run: |
+          echo "hash=$(git ls-tree -r HEAD sources | grep -v '	sources/toolchain/' |
+            sha256sum | cut -c1-24)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache submodules
+        uses: actions/cache@v4
+        with:
+          path: |
+            sources/*
+            !sources/toolchain
+          key: submodules-${{ steps.submodule-key.outputs.hash }}
+          restore-keys: |
+            submodules-
+
       - name: Initialize submodules
         # Shallow, pinned-commit fetch, one submodule at a time with retries.
         # Full `git submodule update --init --recursive` hits HTTP 429/500
@@ -311,7 +333,8 @@ jobs:
 
       # The images contain GPL software (Linux-libre, bash, coreutils, ...):
       # publish the exact corresponding source next to them. GitHub's own
-      # "Source code" archives do not include submodules.
+      # "Source code" archives do not include submodules. Fetched fresh from
+      # upstream here, not from the submodule cache.
       - name: Fetch sources
         run: scripts/fetch-submodules.sh
 

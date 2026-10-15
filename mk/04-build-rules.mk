@@ -45,11 +45,6 @@ $$(BUILD_DIR_$(2))/$(1)/.built: $$(BUILD_DIR_$(2))/$(1)/.copied
 	if [ "$(1)" = "gawk" ] && [ -f "$$(SOURCES_PATCHED_DIR)/$(1)/awklib/stamp-eg" ]; then \
 	  touch "$$(SOURCES_PATCHED_DIR)/$(1)/awklib/stamp-eg"; \
 	fi
-	# Cross-compilation: stub help2man (cross binaries can't run on host)
-	if [ -n "$(CROSS_$(2))" ] && [ -f "$$(BUILD_DIR_$(2))/$(1)/man/help2man" ]; then \
-	  printf '#!/bin/sh\nfor f; do :; done\n' > "$$(BUILD_DIR_$(2))/$(1)/man/help2man"; \
-	  chmod +x "$$(BUILD_DIR_$(2))/$(1)/man/help2man"; \
-	fi
 	PATH="$(TC_PATH_$(2)):$(FAKE_BIN_PATH)" $$(MAKE) $(PARALLEL) -C "$$(BUILD_DIR_$(2))/$(1)"
 	@touch "$$@"
 	@echo "=== $(1) built ($(2)) ==="
@@ -81,11 +76,6 @@ $$(BUILD_DIR_$(2))/$(1)/.built: $$(BUILD_DIR_$(2))/$(1)/.copied | $(FAKE_BIN)/.s
 	    $$($(1)_CONFIGURE_$(2)) \
 	    CFLAGS="$(COMMON_CFLAGS)" LDFLAGS="$(COMMON_LDFLAGS)"
 	printf '%s\n' 'all:' 'install:' 'clean:' '.PHONY: all install clean' > "$$(BUILD_DIR_$(2))/$(1)/po/Makefile" 2>/dev/null || true
-	# Gawk fix: command.c must use bison -p zz prefix (ylwrap overrides specific rule)
-	if [ "$(1)" = "gawk" ] && [ -f "$$(BUILD_DIR_$(2))/$(1)/command.y" ]; then \
-	  bison -y -p zz -o "$$(BUILD_DIR_$(2))/$(1)/command.c" "$$(BUILD_DIR_$(2))/$(1)/command.y" 2>/dev/null; \
-	  touch "$$(BUILD_DIR_$(2))/$(1)/command.c"; \
-	fi
 	# Cross-compilation: stub help2man (cross binaries can't run on host)
 	if [ -n "$(CROSS_$(2))" ] && [ -f "$$(BUILD_DIR_$(2))/$(1)/man/help2man" ]; then \
 	  printf '#!/bin/sh\nfor f; do :; done\n' > "$$(BUILD_DIR_$(2))/$(1)/man/help2man"; \
@@ -185,16 +175,6 @@ $$(BUILD_DIR_$(2))/$(1)/.built: $$(BUILD_DIR_$(2))/$(1)/.copied | $(FAKE_BIN)/.s
 	    printf '#!/bin/sh\nfor f; do :; done\n' > "$$(BUILD_DIR_$(2))/$(1)/man/help2man"; \
 	    chmod +x "$$(BUILD_DIR_$(2))/$(1)/man/help2man"; \
 	  fi; \
-	fi
-	# Gawk fix: command.c must use bison -p zz prefix (ylwrap overrides specific rule)
-	if [ "$(1)" = "gawk" ] && [ -f "$$(BUILD_DIR_$(2))/$(1)/command.y" ]; then \
-	  bison -y -p zz -o "$$(BUILD_DIR_$(2))/$(1)/command.c" "$$(BUILD_DIR_$(2))/$(1)/command.y" 2>/dev/null; \
-	  touch "$$(BUILD_DIR_$(2))/$(1)/command.c"; \
-	fi
-	# Cross-compilation: stub help2man (cross binaries can't run on host)
-	if [ -n "$(CROSS_$(2))" ] && [ -f "$$(BUILD_DIR_$(2))/$(1)/man/help2man" ]; then \
-	  printf '#!/bin/sh\nfor f; do :; done\n' > "$$(BUILD_DIR_$(2))/$(1)/man/help2man"; \
-	  chmod +x "$$(BUILD_DIR_$(2))/$(1)/man/help2man"; \
 	fi
 	PATH="$(TC_PATH_$(2)):$(FAKE_BIN_PATH)" $$(MAKE) $(PARALLEL) -C "$$(BUILD_DIR_$(2))/$(1)"
 	@touch "$$@"
@@ -433,8 +413,6 @@ endef
 # libcrypto. Only libcrypto.so.3 goes into the rootfs; headers and libraries
 # are staged in openssl-stage/ for the OpenSSH build. Everything OpenSSH
 # does not use is left out.
-OPENSSL_TARGET_x86_64 := linux-x86_64
-OPENSSL_TARGET_arm64  := linux-aarch64
 OPENSSL_CONFIGURE := shared no-apps no-docs no-tests no-legacy no-engine no-module \
     no-quic no-comp no-ct no-ocsp no-cms no-ts no-srp no-rfc3779 \
     no-sm2 no-sm3 no-sm4 no-camellia no-aria no-seed no-idea \
@@ -483,7 +461,12 @@ build-openssh-$(1): $$(BUILD_DIR_$(1))/openssh/.built
 $$(BUILD_DIR_$(1))/openssh/.built: $$(BUILD_DIR_$(1))/openssh/.copied $$(BUILD_DIR_$(1))/openssl/.built
 	@echo "=== Building openssh for $(1) ==="
 	cd "$$(BUILD_DIR_$(1))/openssh" && autoreconf -fi
-	cd "$$(BUILD_DIR_$(1))/openssh" && ./configure $$(call HOST_FLAG,$(1)) \
+	# LD_LIBRARY_PATH: configure runs test programs (native builds), which must
+	# load the staged libcrypto, not the build host's (a different OpenSSL
+	# fails the header/library version check). Only for configure: the
+	# binaries get no rpath, the image has this libcrypto in /lib.
+	cd "$$(BUILD_DIR_$(1))/openssh" && \
+	  LD_LIBRARY_PATH="$$(BUILD_DIR_$(1))/openssl-stage/usr/lib" ./configure $$(call HOST_FLAG,$(1)) \
 	  $$(OPENSSH_CONFIGURE) --with-ssl-dir="$$(BUILD_DIR_$(1))/openssl-stage/usr" \
 	  CFLAGS="$$(COMMON_CFLAGS)" LDFLAGS="$$(COMMON_LDFLAGS)"
 	$$(MAKE) $$(PARALLEL) -C "$$(BUILD_DIR_$(1))/openssh"

@@ -3,14 +3,11 @@
 # ═════════════════════════════════════════════════════════════════════════════
 
 clean:
-	@echo "=== Cleaning build artifacts ==="
-	-rm -rf "$(CURDIR)/build" "$(CURDIR)/sources-build" "$(CURDIR)/sources-patched" "$(CURDIR)/build-logs"
-	@echo "=== Cleaning rootfs ==="
-	-rm -rf "$(CURDIR)/rootfs"
+	rm -rf "$(CURDIR)/build" "$(CURDIR)/sources-build" "$(CURDIR)/sources-patched" \
+	  "$(CURDIR)/build-logs" "$(CURDIR)/rootfs"
 
 distclean: clean
-	@echo "=== Removing rootfs ==="
-	-rm -rf "$(CURDIR)/rootfs"
+	rm -rf "$(DISK_DIR)"
 
 # ═════════════════════════════════════════════════════════════════════════════
 # Help
@@ -113,7 +110,7 @@ help:
 	@echo "  make prepare-sources       copy and patch all sources"
 	@echo "  make prepare-sources-<pkg> copy and patch one package"
 	@echo "  make clean                 remove build artifacts"
-	@echo "  make distclean             clean + remove rootfs"
+	@echo "  make distclean             clean + remove disk images"
 	@echo "  make LOG=1 <target>        tee output to build-logs/<target>.log"
 	@echo "  make STRIP=0 install       skip binary stripping"
 	@echo ""

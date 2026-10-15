@@ -1,57 +1,44 @@
 # ═════════════════════════════════════════════════════════════════════════════
 # Phase 4 — Init system (/etc skeleton + runit service directories)
 # ═════════════════════════════════════════════════════════════════════════════
+#
+# templates/etc/service/<name>/ becomes /etc/service/<name>/ (supervised by
+# runsvdir). getty-TTY is installed as getty-<console>, with TTY replaced by
+# the arch's serial console (TTY_<a> in 00-vars.mk).
 
 TEMPLATES_DIR := $(CURDIR)/templates
+ETC_FILES     := fstab passwd group shadow hostname hosts resolv.conf ld.so.conf
+RUNIT_FILES   := 1 2 3 ctrlaltdel diag.sh
+BIN_SCRIPTS   := poweroff reboot halt shutdown console-shell
+SERVICES      := getty-TTY dhcpcd sshd
 
 define INSTALL_INIT
 install-init-$(1):
 	@echo "=== Installing init system + /etc skeleton ($(1)) ==="
-	TTY=ttyS0; if [ "$(1)" = "arm64" ]; then TTY=ttyAMA0; fi; \
-	R="$(ROOTFS_$(1))"; T="$(TEMPLATES_DIR)"; \
-	for f in fstab passwd group shadow hostname hosts resolv.conf ld.so.conf; do \
-	  cp "$$$${T}/etc/$$$${f}" "$$$${R}/etc/$$$${f}"; \
+	set -e; R="$(ROOTFS_$(1))"; T="$(TEMPLATES_DIR)"; \
+	mkdir -p "$$$$R/etc/runit" "$$$$R/etc/service" "$$$$R/etc/ssh"; \
+	for f in $(ETC_FILES); do cp "$$$$T/etc/$$$$f" "$$$$R/etc/$$$$f"; done; \
+	chmod 644 "$$$$R/etc/passwd" "$$$$R/etc/group"; \
+	chmod 600 "$$$$R/etc/shadow"; \
+	cp "$$$$T/etc/ssh/sshd_config" "$$$$R/etc/ssh/sshd_config"; \
+	for f in $(RUNIT_FILES); do install -m 755 "$$$$T/etc/runit/$$$$f" "$$$$R/etc/runit/$$$$f"; done; \
+	for s in $(SERVICES); do \
+	  d="$$$$R/etc/service/$$$$(echo "$$$$s" | sed 's/TTY/$(TTY_$(1))/')"; \
+	  rm -rf "$$$$d"; mkdir -p "$$$$d"; \
+	  (cd "$$$$T/etc/service/$$$$s" && find . -type f) | while read -r f; do \
+	    mkdir -p "$$$$d/$$$$(dirname "$$$$f")"; \
+	    sed 's/TTY/$(TTY_$(1))/g' "$$$$T/etc/service/$$$$s/$$$$f" > "$$$$d/$$$$f"; \
+	    chmod 755 "$$$$d/$$$$f"; \
+	  done; \
+	  [ ! -d "$$$$d/log" ] || mkdir -p "$$$$d/log/main"; \
 	done; \
-	chmod 644 "$$$${R}/etc/passwd" "$$$${R}/etc/group"; \
-	chmod 600 "$$$${R}/etc/shadow"; \
-	ldconfig -r "$$$${R}" 2>/dev/null || true; \
-	mkdir -p "$$$${R}/etc/runit"; \
-	cp "$$$${T}/etc/runit/1" "$$$${T}/etc/runit/2" \
-	   "$$$${T}/etc/runit/3" "$$$${T}/etc/runit/ctrlaltdel" \
-	   "$$$${T}/etc/runit/diag.sh" \
-	   "$$$${R}/etc/runit/"; \
-	chmod 755 "$$$${R}/etc/runit/1" "$$$${R}/etc/runit/2" \
-	         "$$$${R}/etc/runit/3" "$$$${R}/etc/runit/ctrlaltdel" \
-	         "$$$${R}/etc/runit/diag.sh"; \
-	GD="$$$${R}/etc/service/getty-$$$${TTY}"; \
-	mkdir -p "$$$${GD}/log/main"; \
-	sed "s/TTY/$$$${TTY}/g" "$$$${T}/etc/service/getty-TTY/run" > "$$$${GD}/run"; \
-	sed "s/TTY/$$$${TTY}/g" "$$$${T}/etc/service/getty-TTY/finish" > "$$$${GD}/finish"; \
-	cp "$$$${T}/etc/service/getty-TTY/log/run" "$$$${GD}/log/run"; \
-	chmod 755 "$$$${GD}/run" "$$$${GD}/finish" "$$$${GD}/log/run"; \
-	DD="$$$${R}/etc/service/dhcpcd"; \
-	mkdir -p "$$$${DD}/log/main"; \
-	cp "$$$${T}/etc/service/dhcpcd/run" "$$$${DD}/run"; \
-	cp "$$$${T}/etc/service/dhcpcd/log/run" "$$$${DD}/log/run"; \
-	chmod 755 "$$$${DD}/run" "$$$${DD}/log/run"; \
-	SD="$$$${R}/etc/service/sshd"; \
-	mkdir -p "$$$${SD}/log/main" "$$$${R}/etc/ssh"; \
-	cp "$$$${T}/etc/service/sshd/run" "$$$${SD}/run"; \
-	cp "$$$${T}/etc/service/sshd/log/run" "$$$${SD}/log/run"; \
-	chmod 755 "$$$${SD}/run" "$$$${SD}/log/run"; \
-	cp "$$$${T}/etc/ssh/sshd_config" "$$$${R}/etc/ssh/sshd_config"; \
-	ln -sf /bin/bash "$$$${R}/bin/sh" 2>/dev/null || true; \
-	for prog in poweroff reboot halt shutdown console-shell; do \
-	  cp "$$$${T}/bin/$$$${prog}" "$$$${R}/bin/$$$${prog}"; \
-	  chmod 755 "$$$${R}/bin/$$$${prog}"; \
-	done; \
-	mkdir -p "$$$${R}/etc/init.d" \
-	         "$$$${R}/root" "$$$${R}/home" "$$$${R}/tmp" \
-	         "$$$${R}/proc" "$$$${R}/sys" "$$$${R}/dev" "$$$${R}/run" \
-	         "$$$${R}/var/log" "$$$${R}/var/run" "$$$${R}/var/db" \
-	         "$$$${R}/var/spool" "$$$${R}/var/tmp" "$$$${R}/var/lock" "$$$${R}/var/empty"; \
-	chmod 700 "$$$${R}/root"; \
-	chmod 755 "$$$${R}/var/empty"
+	for p in $(BIN_SCRIPTS); do install -m 755 "$$$$T/bin/$$$$p" "$$$$R/bin/$$$$p"; done; \
+	ln -sf /bin/bash "$$$$R/bin/sh"; \
+	mkdir -p "$$$$R/etc/init.d" "$$$$R/root" "$$$$R/home" "$$$$R/tmp" "$$$$R/proc" "$$$$R/sys" "$$$$R/dev" \
+	         "$$$$R/run" "$$$$R/var/log" "$$$$R/var/run" "$$$$R/var/db" "$$$$R/var/spool" \
+	         "$$$$R/var/tmp" "$$$$R/var/lock" "$$$$R/var/empty"; \
+	chmod 700 "$$$$R/root"; chmod 755 "$$$$R/var/empty"; chmod 1777 "$$$$R/tmp" "$$$$R/var/tmp"; \
+	ldconfig -r "$$$$R" 2>/dev/null || true
 	@echo "=== Init system installed ($(1)) ==="
 endef
 

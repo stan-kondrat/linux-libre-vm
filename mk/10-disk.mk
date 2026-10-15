@@ -41,27 +41,18 @@ disk-image-clean:
 	rm -rf $(DISK_DIR)
 
 # ═════════════════════════════════════════════════════════════════════════════
-# QEMU test
+# QEMU boot
 # ═════════════════════════════════════════════════════════════════════════════
-
-KERNEL_x86_64 := $(BUILD_DIR_x86_64)/linux-libre/arch/x86/boot/bzImage
-KERNEL_arm64  := $(BUILD_DIR_arm64)/linux-libre/arch/arm64/boot/Image.gz
-
-QEMU_DISK_x86_64 := $(DISK_DIR)/disk-x86_64.img
-QEMU_DISK_arm64  := $(DISK_DIR)/disk-arm64.img
 
 # Foreground boot, console on this terminal (quit: Ctrl-a x). Devices and
 # acceleration come from vm/qemu.sh (docs/qemu.md); BOOT_DIAG=1 adds boot.diag=1
-QEMU_APPEND_x86_64 := root=/dev/vda rw console=ttyS0$(if $(BOOT_DIAG), boot.diag=1)
-QEMU_APPEND_arm64  := root=/dev/vda rw console=ttyAMA0$(if $(BOOT_DIAG), boot.diag=1)
+define QEMU_RULE
+qemu-$(1): $(call KERNEL_OUT,$(1)) $(DISK_DIR)/disk-$(1).img
+	ARCH=$(1) KERNEL="$(call KERNEL_OUT,$(1))" DISK="$(DISK_DIR)/disk-$(1).img" \
+	  APPEND="root=/dev/vda rw console=$(TTY_$(1))$$(if $$(BOOT_DIAG), boot.diag=1)" vm/qemu.sh run
+endef
 
-QEMU_RUN = ARCH=$(1) KERNEL="$(KERNEL_$(1))" DISK="$(QEMU_DISK_$(1))" APPEND="$(QEMU_APPEND_$(1))" vm/qemu.sh run
-
-qemu-x86_64: $(KERNEL_x86_64) $(QEMU_DISK_x86_64)
-	$(call QEMU_RUN,x86_64)
-
-qemu-arm64: $(KERNEL_arm64) $(QEMU_DISK_arm64)
-	$(call QEMU_RUN,arm64)
+$(foreach t,$(TARGETS),$(eval $(call QEMU_RULE,$(t))))
 
 ifneq ($(ARCH),)
 disk-image: disk-image-$(ARCH)

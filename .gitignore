@@ -32,3 +32,6 @@ sources/toolchain/dist/
 
 # macOS Finder metadata
 .DS_Store
+
+# Build logs
+*.log

@@ -26,40 +26,15 @@ $(foreach t,$(TARGETS),$(eval $(call RUNIT_BUILD_RULES,$(t))))
 $(foreach t,$(TARGETS),$(eval $(call OPENSSL_BUILD_RULES,$(t))))
 $(foreach t,$(TARGETS),$(eval $(call OPENSSH_BUILD_RULES,$(t))))
 
-# ═════════════════════════════════════════════════════════════════════════════
-# Default aliases — build-<pkg> builds for ALL targets
-# ═════════════════════════════════════════════════════════════════════════════
-
-coreutils:   build-coreutils-x86_64 build-coreutils-arm64
-bash:        build-bash-x86_64 build-bash-arm64
-grep:        build-grep-x86_64 build-grep-arm64
-sed:         build-sed-x86_64 build-sed-arm64
-gawk:        build-gawk-x86_64 build-gawk-arm64
-findutils:   build-findutils-x86_64 build-findutils-arm64
-diffutils:   build-diffutils-x86_64 build-diffutils-arm64
-gzip:        build-gzip-x86_64 build-gzip-arm64
-tar:         build-tar-x86_64 build-tar-arm64
-vim:         build-vim-x86_64 build-vim-arm64
-iproute2:    build-iproute2-x86_64 build-iproute2-arm64
-procps-ng:   build-procps-ng-x86_64 build-procps-ng-arm64
-util-linux:  build-util-linux-x86_64 build-util-linux-arm64
-runit:       build-runit-x86_64 build-runit-arm64
-dhcpcd:      build-dhcpcd-x86_64 build-dhcpcd-arm64
-openssl:     build-openssl-x86_64 build-openssl-arm64
-openssh:     build-openssh-x86_64 build-openssh-arm64
 
 # ═════════════════════════════════════════════════════════════════════════════
-# Per-target userland aggregate targets
+# Aliases and aggregates (USERLAND_PKGS: mk/00-vars.mk)
 # ═════════════════════════════════════════════════════════════════════════════
 
-USERLAND_PKGS = coreutils bash grep sed gawk findutils diffutils gzip tar vim \
-                iproute2 procps-ng util-linux runit dhcpcd openssl openssh
+# <pkg>: build it for all targets
+$(foreach p,$(USERLAND_PKGS),$(eval $(p): $(addprefix build-$(p)-,$(TARGETS))))
 
-userland-x86_64: $(addprefix build-,$(addsuffix -x86_64,$(USERLAND_PKGS)))
-	@echo "=== All userland packages built (x86_64) ==="
-
-userland-arm64: $(addprefix build-,$(addsuffix -arm64,$(USERLAND_PKGS)))
-	@echo "=== All userland packages built (arm64) ==="
+$(foreach a,$(TARGETS),$(eval userland-$(a): $(addprefix build-,$(addsuffix -$(a),$(USERLAND_PKGS)))))
 
 userland: $(addprefix userland-,$(BUILD_ARCHS))
 	@echo "=== All userland packages built (all targets) ==="
@@ -68,38 +43,28 @@ all: check-env build-dirs userland
 
 build: check-env build-dirs userland kernel
 	@echo "=== All packages + kernel built for all targets ==="
-	@echo "=== All packages built for all targets ==="
 	@echo "  Run 'make install' to install all, or 'make ARCH=x86_64 install' / 'make ARCH=arm64 install'"
 
 # ═════════════════════════════════════════════════════════════════════════════
-# Per-target install targets
+# install-<arch>: packages → libraries → strip → prune → /bin → init
 # ═════════════════════════════════════════════════════════════════════════════
 
-install-x86_64: userland-x86_64
-	@echo "=== Installing to $(ROOTFS_x86_64) ==="
-	mkdir -p "$(ROOTFS_x86_64)"
+define INSTALL_ARCH
+install-$(1): userland-$(1)
+	@echo "=== Installing to $(ROOTFS_$(1)) ==="
+	mkdir -p "$(ROOTFS_$(1))"
 	for pkg in $(USERLAND_PKGS); do \
-	  $(MAKE) install-$$pkg-x86_64 || exit 1; \
+	  $$(MAKE) install-$$$$pkg-$(1) || exit 1; \
 	done
-	$(MAKE) install-libs-x86_64
-	$(MAKE) strip-all-x86_64 2>/dev/null || true
-	$(MAKE) prune-docs-x86_64 2>/dev/null || true
-	$(MAKE) consolidate-bin-x86_64
-	$(MAKE) install-init-x86_64
-	@echo "=== Install complete (x86_64) ==="
+	$$(MAKE) install-libs-$(1)
+	$$(MAKE) strip-all-$(1) 2>/dev/null || true
+	$$(MAKE) prune-docs-$(1) 2>/dev/null || true
+	$$(MAKE) consolidate-bin-$(1)
+	$$(MAKE) install-init-$(1)
+	@echo "=== Install complete ($(1)) ==="
+endef
 
-install-arm64: userland-arm64
-	@echo "=== Installing to $(ROOTFS_arm64) ==="
-	mkdir -p "$(ROOTFS_arm64)"
-	for pkg in $(USERLAND_PKGS); do \
-	  $(MAKE) install-$$pkg-arm64 || exit 1; \
-	done
-	$(MAKE) install-libs-arm64
-	$(MAKE) strip-all-arm64 2>/dev/null || true
-	$(MAKE) prune-docs-arm64 2>/dev/null || true
-	$(MAKE) consolidate-bin-arm64
-	$(MAKE) install-init-arm64
-	@echo "=== Install complete (arm64) ==="
+$(foreach t,$(TARGETS),$(eval $(call INSTALL_ARCH,$(t))))
 
 install-all: $(addprefix install-,$(BUILD_ARCHS))
 	@echo "=== All installs complete ==="
@@ -108,152 +73,77 @@ install: install-all
 	@echo "=== All installs complete ==="
 
 # ═════════════════════════════════════════════════════════════════════════════
-# Copy host shared libraries into rootfs
+# Copy shared libraries into rootfs
 # ═════════════════════════════════════════════════════════════════════════════
+# The dynamic linker (LDSO_<a>) and the libraries in INSTALL_LIBS_<a> come
+# from the cross sysroot, or from the host for native builds; copy-libs.sh
+# then adds everything else the binaries link against (DT_NEEDED,
+# recursively): native builds pick up host libraries such as ncurses, gmp or
+# pam.
 
-install-libs-x86_64:
-	@echo "=== Installing shared libraries (x86_64) ==="
-	mkdir -p "$(ROOTFS_x86_64)/lib64" "$(ROOTFS_x86_64)/lib"
-	SYSROOT="$(SYSROOT_x86_64)"; \
-	LIBS="libc.so.6 libm.so.6 libpthread.so.0 librt.so.1 \
-	  libdl.so.2 libutil.so.1 libresolv.so.2 libcrypt.so.2 \
-	  libnss_files.so.2 libnss_dns.so.2 \
-	  libncursesw.so.6 libgmp.so.10 libmpfr.so.6"; \
-	if [ -n "$$SYSROOT" ] && [ -d "$$SYSROOT/lib" ]; then \
-	  cp -L "$$SYSROOT/lib64/ld-linux-x86-64.so.2" "$(ROOTFS_x86_64)/lib64/" 2>/dev/null || \
-	    cp -L "$$SYSROOT/lib/ld-linux-x86-64.so.2" "$(ROOTFS_x86_64)/lib64/"; \
-	  for lib in $$LIBS; do \
-	    cp -L "$$SYSROOT/lib64/$$lib" "$(ROOTFS_x86_64)/lib/" 2>/dev/null || \
-	      cp -L "$$SYSROOT/lib/$$lib" "$(ROOTFS_x86_64)/lib/" 2>/dev/null || true; \
-	  done; \
-	else \
-	  DIRS="/usr/lib64 /usr/lib /usr/lib/x86_64-linux-gnu /lib64 /lib /lib/x86_64-linux-gnu"; \
-	  for d in $$DIRS; do \
-	    [ -e "$$d/ld-linux-x86-64.so.2" ] && cp -L "$$d/ld-linux-x86-64.so.2" "$(ROOTFS_x86_64)/lib64/" && break; \
-	  done; \
-	  [ -e "$(ROOTFS_x86_64)/lib64/ld-linux-x86-64.so.2" ] || { echo "ERROR: ld-linux-x86-64.so.2 not found"; exit 1; }; \
-	  for lib in $$LIBS; do \
-	    for d in $$DIRS; do \
-	      [ -e "$$d/$$lib" ] && cp -L "$$d/$$lib" "$(ROOTFS_x86_64)/lib/" && break; \
-	    done; \
-	  done; \
-	fi
-	# Everything else the binaries link against (DT_NEEDED, recursively):
-	# native builds pick up host libraries such as ncurses, gmp or pam
-	if [ -n "$(SYSROOT_x86_64)" ]; then \
-	  DIRS="$(SYSROOT_x86_64)/lib $(SYSROOT_x86_64)/usr/lib $(SYSROOT_x86_64)/lib64 $(SYSROOT_x86_64)/usr/lib64"; \
-	else \
-	  DIRS="/usr/lib /usr/lib64 /usr/lib/x86_64-linux-gnu /lib /lib64 /lib/x86_64-linux-gnu"; \
-	fi; \
-	$(CURDIR)/mk/copy-libs.sh "$(ROOTFS_x86_64)" $(CROSS_x86_64)readelf $$DIRS
-	# ld-linux searches /usr/lib64/, not /lib/ — symlink so it finds our libs
-	ln -sf /lib "$(ROOTFS_x86_64)/usr/lib64" 2>/dev/null || true
-	@echo "=== Shared libraries installed ==="
+INSTALL_LIBS_x86_64 := libc.so.6 libm.so.6 libpthread.so.0 librt.so.1 \
+    libdl.so.2 libutil.so.1 libresolv.so.2 libcrypt.so.2 \
+    libnss_files.so.2 libnss_dns.so.2 \
+    libncursesw.so.6 libgmp.so.10 libmpfr.so.6
+INSTALL_LIBS_arm64  := libc.so.6 libm.so.6 libpthread.so.0 librt.so.1 \
+    libdl.so.2 libutil.so.1 libresolv.so.2
 
-install-libs-arm64:
-	@echo "=== Installing shared libraries (arm64) ==="
-	mkdir -p "$(ROOTFS_arm64)/lib" "$(ROOTFS_arm64)/lib64"
-	SYSROOT="$(SYSROOT_arm64)"; \
-	LIBS="libc.so.6 libm.so.6 libpthread.so.0 librt.so.1 \
-	  libdl.so.2 libutil.so.1 libresolv.so.2"; \
-	if [ -n "$$SYSROOT" ] && [ -d "$$SYSROOT/lib" ]; then \
-	  cp -L "$$SYSROOT/lib/ld-linux-aarch64.so.1" "$(ROOTFS_arm64)/lib/"; \
-	  ln -sf /lib/ld-linux-aarch64.so.1 "$(ROOTFS_arm64)/lib64/"; \
-	  for lib in $$LIBS; do \
-	    cp -L "$$SYSROOT/lib/$$lib" "$(ROOTFS_arm64)/lib/" 2>/dev/null || true; \
+LIB_DIRS = $(foreach d,usr/lib usr/lib64 usr/lib/$(MULTIARCH_$(1)) lib lib64 lib/$(MULTIARCH_$(1)),$(SYSROOT_$(1))/$(d))
+
+define INSTALL_LIBS
+install-libs-$(1):
+	@echo "=== Installing shared libraries ($(1)) ==="
+	mkdir -p "$(ROOTFS_$(1))/lib" "$(ROOTFS_$(1))/lib64"
+	for d in $(call LIB_DIRS,$(1)); do \
+	  [ -e "$$$$d/$(notdir $(LDSO_$(1)))" ] && { cp -L "$$$$d/$(notdir $(LDSO_$(1)))" "$(ROOTFS_$(1))$(LDSO_$(1))"; break; }; \
+	done; \
+	[ -e "$(ROOTFS_$(1))$(LDSO_$(1))" ] || { echo "ERROR: $(notdir $(LDSO_$(1))) not found"; exit 1; }
+	# A dynamic linker in /lib is also reachable as /lib64/<name>
+	$(if $(filter /lib/,$(dir $(LDSO_$(1)))),ln -sf $(LDSO_$(1)) "$(ROOTFS_$(1))/lib64/")
+	for lib in $(INSTALL_LIBS_$(1)); do \
+	  for d in $(call LIB_DIRS,$(1)); do \
+	    [ -e "$$$$d/$$$$lib" ] && { cp -L "$$$$d/$$$$lib" "$(ROOTFS_$(1))/lib/"; break; }; \
 	  done; \
-	else \
-	  DIRS="/usr/lib /usr/lib64 /usr/lib/aarch64-linux-gnu /lib /lib64 /lib/aarch64-linux-gnu"; \
-	  for d in $$DIRS; do \
-	    [ -e "$$d/ld-linux-aarch64.so.1" ] && cp -L "$$d/ld-linux-aarch64.so.1" "$(ROOTFS_arm64)/lib/" && break; \
-	  done; \
-	  [ -e "$(ROOTFS_arm64)/lib/ld-linux-aarch64.so.1" ] || { echo "ERROR: ld-linux-aarch64.so.1 not found"; exit 1; }; \
-	  ln -sf /lib/ld-linux-aarch64.so.1 "$(ROOTFS_arm64)/lib64/"; \
-	  for lib in $$LIBS; do \
-	    for d in $$DIRS; do \
-	      [ -e "$$d/$$lib" ] && cp -L "$$d/$$lib" "$(ROOTFS_arm64)/lib/" && break; \
-	    done; \
-	  done; \
-	fi
-	# Everything else the binaries link against (DT_NEEDED, recursively):
-	# native builds pick up host libraries such as ncurses, gmp or pam
-	if [ -n "$(SYSROOT_arm64)" ]; then \
-	  DIRS="$(SYSROOT_arm64)/lib $(SYSROOT_arm64)/usr/lib $(SYSROOT_arm64)/lib64 $(SYSROOT_arm64)/usr/lib64"; \
-	else \
-	  DIRS="/usr/lib /usr/lib64 /usr/lib/aarch64-linux-gnu /lib /lib64 /lib/aarch64-linux-gnu"; \
-	fi; \
-	$(CURDIR)/mk/copy-libs.sh "$(ROOTFS_arm64)" $(CROSS_arm64)readelf $$DIRS
-	# ld-linux on aarch64 may search /usr/lib64/ — symlink so it finds our libs
-	ln -sf /lib "$(ROOTFS_arm64)/usr/lib64" 2>/dev/null || true
+	done
+	$(CURDIR)/mk/copy-libs.sh "$(ROOTFS_$(1))" $(CROSS_$(1))readelf $(call LIB_DIRS,$(1))
+	# ld-linux may search /usr/lib64/, not /lib/ — symlink so it finds our libs
+	ln -sf /lib "$(ROOTFS_$(1))/usr/lib64" 2>/dev/null || true
 	@echo "=== Shared libraries installed ==="
+endef
+
+$(foreach t,$(TARGETS),$(eval $(call INSTALL_LIBS,$(t))))
 
 # ═════════════════════════════════════════════════════════════════════════════
 # Per-target post-install
 # ═════════════════════════════════════════════════════════════════════════════
 
-strip-all-x86_64:
+define STRIP_ALL
+strip-all-$(1):
 ifneq ($(STRIP),0)
-	@echo "=== Stripping x86_64 binaries ==="
-	find "$(ROOTFS_x86_64)"/bin "$(ROOTFS_x86_64)"/sbin \
-	     "$(ROOTFS_x86_64)"/usr/bin "$(ROOTFS_x86_64)"/usr/sbin \
-	     -type f -exec $(CROSS_x86_64)strip -s {} \; 2>/dev/null || true
-	find "$(ROOTFS_x86_64)"/lib "$(ROOTFS_x86_64)"/usr/lib "$(ROOTFS_x86_64)"/usr/libexec \
-	     -type f -name '*.so*' -exec $(CROSS_x86_64)strip --strip-unneeded {} \; 2>/dev/null || true
+	@echo "=== Stripping $(1) binaries ==="
+	find "$(ROOTFS_$(1))"/bin "$(ROOTFS_$(1))"/sbin \
+	     "$(ROOTFS_$(1))"/usr/bin "$(ROOTFS_$(1))"/usr/sbin \
+	     -type f -exec $(CROSS_$(1))strip -s {} \; 2>/dev/null || true
+	find "$(ROOTFS_$(1))"/lib "$(ROOTFS_$(1))"/usr/lib "$(ROOTFS_$(1))"/usr/libexec \
+	     -type f -name '*.so*' -exec $(CROSS_$(1))strip --strip-unneeded {} \; 2>/dev/null || true
 endif
+endef
 
-strip-all-arm64:
-ifneq ($(STRIP),0)
-	@echo "=== Stripping arm64 binaries ==="
-	find "$(ROOTFS_arm64)"/bin "$(ROOTFS_arm64)"/sbin \
-	     "$(ROOTFS_arm64)"/usr/bin "$(ROOTFS_arm64)"/usr/sbin \
-	     -type f -exec $(CROSS_arm64)strip -s {} \; 2>/dev/null || true
-	find "$(ROOTFS_arm64)"/lib "$(ROOTFS_arm64)"/usr/lib "$(ROOTFS_arm64)"/usr/libexec \
-	     -type f -name '*.so*' -exec $(CROSS_arm64)strip --strip-unneeded {} \; 2>/dev/null || true
-endif
+$(foreach t,$(TARGETS),$(eval $(call STRIP_ALL,$(t))))
 
-prune-docs-x86_64:
-	@echo "=== Pruning docs (x86_64) ==="
-	-rm -rf "$(ROOTFS_x86_64)"/usr/share/doc
-	-rm -rf "$(ROOTFS_x86_64)"/usr/share/man
-	-rm -rf "$(ROOTFS_x86_64)"/usr/share/info
-	-rm -rf "$(ROOTFS_x86_64)"/usr/share/locale
-	-rm -rf "$(ROOTFS_x86_64)"/tmp/*
-	-rm -rf "$(ROOTFS_x86_64)"/var/cache
-	-rm -rf "$(ROOTFS_x86_64)"/usr/share/applications
-	-rm -rf "$(ROOTFS_x86_64)"/usr/share/icons
-	# Strip vim bloat (keep only syntax/, indent/, ftplugin/, autoload/, colors/, plugin/)
-	-rm -rf "$(ROOTFS_x86_64)"/usr/share/vim/vim92/doc
-	-rm -rf "$(ROOTFS_x86_64)"/usr/share/vim/vim92/tutor
-	-rm -rf "$(ROOTFS_x86_64)"/usr/share/vim/vim92/spell
-	-rm -rf "$(ROOTFS_x86_64)"/usr/share/vim/vim92/print
-	-rm -rf "$(ROOTFS_x86_64)"/usr/share/vim/vim92/macros
-	-rm -rf "$(ROOTFS_x86_64)"/usr/share/vim/vim92/tools
-	-rm -rf "$(ROOTFS_x86_64)"/usr/share/vim/vim92/pack
-	-rm -rf "$(ROOTFS_x86_64)"/usr/share/vim/vim92/colors/lists
-	-rm -rf "$(ROOTFS_x86_64)"/usr/share/vim/vim92/colors/tools
-	-rm -rf "$(ROOTFS_x86_64)"/usr/share/vim/vim92/import
+# Documentation, locales, desktop files, and the parts of the vim runtime
+# not needed (keep syntax/, indent/, ftplugin/, autoload/, colors/, plugin/)
+PRUNE_DOCS_PATHS := usr/share/doc usr/share/man usr/share/info usr/share/locale \
+    var/cache usr/share/applications usr/share/icons \
+    $(addprefix usr/share/vim/vim92/,doc tutor spell print macros tools pack colors/lists colors/tools import)
 
-prune-docs-arm64:
-	@echo "=== Pruning docs (arm64) ==="
-	-rm -rf "$(ROOTFS_arm64)"/usr/share/doc
-	-rm -rf "$(ROOTFS_arm64)"/usr/share/man
-	-rm -rf "$(ROOTFS_arm64)"/usr/share/info
-	-rm -rf "$(ROOTFS_arm64)"/usr/share/locale
-	-rm -rf "$(ROOTFS_arm64)"/tmp/*
-	-rm -rf "$(ROOTFS_arm64)"/var/cache
-	-rm -rf "$(ROOTFS_arm64)"/usr/share/applications
-	-rm -rf "$(ROOTFS_arm64)"/usr/share/icons
-	# Strip vim bloat (keep only syntax/, indent/, ftplugin/, autoload/, colors/, plugin/)
-	-rm -rf "$(ROOTFS_arm64)"/usr/share/vim/vim92/doc
-	-rm -rf "$(ROOTFS_arm64)"/usr/share/vim/vim92/tutor
-	-rm -rf "$(ROOTFS_arm64)"/usr/share/vim/vim92/spell
-	-rm -rf "$(ROOTFS_arm64)"/usr/share/vim/vim92/print
-	-rm -rf "$(ROOTFS_arm64)"/usr/share/vim/vim92/macros
-	-rm -rf "$(ROOTFS_arm64)"/usr/share/vim/vim92/tools
-	-rm -rf "$(ROOTFS_arm64)"/usr/share/vim/vim92/pack
-	-rm -rf "$(ROOTFS_arm64)"/usr/share/vim/vim92/colors/lists
-	-rm -rf "$(ROOTFS_arm64)"/usr/share/vim/vim92/colors/tools
-	-rm -rf "$(ROOTFS_arm64)"/usr/share/vim/vim92/import
+define PRUNE_DOCS
+prune-docs-$(1):
+	@echo "=== Pruning docs ($(1)) ==="
+	-cd "$(ROOTFS_$(1))" && rm -rf $(PRUNE_DOCS_PATHS) tmp/*
+endef
+
+$(foreach t,$(TARGETS),$(eval $(call PRUNE_DOCS,$(t))))
 
 # ═════════════════════════════════════════════════════════════════════════════
 # Binary consolidation — move all binaries to /bin
@@ -303,6 +193,6 @@ $(foreach pkg,$(USERLAND_PKGS),$(eval install-$(pkg): install-$(pkg)-$(ARCH)))
 userland: userland-$(ARCH)
 install: install-$(ARCH)
 else
-$(foreach pkg,$(USERLAND_PKGS),$(eval build-$(pkg): build-$(pkg)-x86_64 build-$(pkg)-arm64))
-$(foreach pkg,$(USERLAND_PKGS),$(eval install-$(pkg): install-$(pkg)-x86_64 install-$(pkg)-arm64))
+$(foreach pkg,$(USERLAND_PKGS),$(eval build-$(pkg): $(addprefix build-$(pkg)-,$(TARGETS))))
+$(foreach pkg,$(USERLAND_PKGS),$(eval install-$(pkg): $(addprefix install-$(pkg)-,$(TARGETS))))
 endif
