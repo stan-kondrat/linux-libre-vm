@@ -1,0 +1,10 @@
+# OpenSSH server — see /etc/service/sshd/run
+#
+# root logs in with a key only: /root/.ssh/authorized_keys, added on the
+# serial console (the image contains no keys)
+PermitRootLogin prohibit-password
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+AuthorizedKeysFile .ssh/authorized_keys
+PidFile /run/sshd.pid
+Subsystem sftp /usr/libexec/sftp-server

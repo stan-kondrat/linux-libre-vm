@@ -23,6 +23,8 @@ $(foreach t,$(TARGETS),$(eval $(call IPROUTE2_BUILD_RULES,$(t))))
 $(foreach t,$(TARGETS),$(eval $(call DHCPCD_BUILD_RULES,$(t))))
 $(foreach t,$(TARGETS),$(eval $(call VIM_BUILD_RULES,$(t))))
 $(foreach t,$(TARGETS),$(eval $(call RUNIT_BUILD_RULES,$(t))))
+$(foreach t,$(TARGETS),$(eval $(call OPENSSL_BUILD_RULES,$(t))))
+$(foreach t,$(TARGETS),$(eval $(call OPENSSH_BUILD_RULES,$(t))))
 
 # ═════════════════════════════════════════════════════════════════════════════
 # Default aliases — build-<pkg> builds for ALL targets
@@ -43,13 +45,15 @@ procps-ng:   build-procps-ng-x86_64 build-procps-ng-arm64
 util-linux:  build-util-linux-x86_64 build-util-linux-arm64
 runit:       build-runit-x86_64 build-runit-arm64
 dhcpcd:      build-dhcpcd-x86_64 build-dhcpcd-arm64
+openssl:     build-openssl-x86_64 build-openssl-arm64
+openssh:     build-openssh-x86_64 build-openssh-arm64
 
 # ═════════════════════════════════════════════════════════════════════════════
 # Per-target userland aggregate targets
 # ═════════════════════════════════════════════════════════════════════════════
 
 USERLAND_PKGS = coreutils bash grep sed gawk findutils diffutils gzip tar vim \
-                iproute2 procps-ng util-linux runit dhcpcd
+                iproute2 procps-ng util-linux runit dhcpcd openssl openssh
 
 userland-x86_64: $(addprefix build-,$(addsuffix -x86_64,$(USERLAND_PKGS)))
 	@echo "=== All userland packages built (x86_64) ==="

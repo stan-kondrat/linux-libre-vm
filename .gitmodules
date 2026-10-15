@@ -43,6 +43,14 @@
 [submodule "sources/dhcpcd"]
 	path = sources/dhcpcd
 	url = https://github.com/NetworkConfiguration/dhcpcd.git
+[submodule "sources/openssl"]
+	path = sources/openssl
+	url = https://github.com/openssl/openssl.git
+	ref = refs/tags/openssl-3.6.5
+[submodule "sources/openssh"]
+	path = sources/openssh
+	url = https://github.com/openssh/openssh-portable.git
+	ref = refs/tags/V_10_6_P1
 [submodule "sources/linux-libre"]
 	path = sources/linux-libre
 	url = git://linux-libre.fsfla.org/releases.git

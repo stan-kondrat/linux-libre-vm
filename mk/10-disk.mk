@@ -20,6 +20,8 @@ disk-image-$(1):
 	  -O ^metadata_csum,^orphan_file,^flex_bg,^huge_file,^dir_nlink \
 	  -d "$(ROOTFS_$(1))" \
 	  "$(DISK_DIR)/disk-$(1).img" 2>/dev/null
+	# Every file owned by root (the rootfs was staged by the build user)
+	$(CURDIR)/mk/chown-root.sh "$(ROOTFS_$(1))" "$(DISK_DIR)/disk-$(1).img"
 	# Run fsck to ensure clean filesystem
 	e2fsck -fn "$(DISK_DIR)/disk-$(1).img" > /dev/null 2>&1 || true
 	tune2fs -f -i 0 -c 0 "$(DISK_DIR)/disk-$(1).img" > /dev/null 2>&1 || true

@@ -133,6 +133,18 @@ shared network at boot.
 After rebuilding the image, run `make utm-recreate` to pick it up; changes
 made inside the VM are not written back to `disks/disk-arm64.img`.
 
+## SSH
+
+The images run an OpenSSH server (root, key login only) with no keys in the
+image: add yours to `/root/.ssh/authorized_keys` on the serial console first
+(see the README's SSH section). UTM's shared network makes the guest
+reachable from the Mac at its DHCP address:
+
+```bash
+make utm-start utm-console         # add the key, `ip addr` shows the address; Ctrl-] leaves
+ssh root@<guest address>
+```
+
 ## How it works
 
 The VM is created through UTM's AppleScript API with these settings:

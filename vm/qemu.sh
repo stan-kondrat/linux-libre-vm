@@ -56,6 +56,8 @@
 #   NET      user | none                (default: user — NAT, guest gets DHCP)
 #   ACCEL    auto | kvm | hvf | tcg     (default: auto)
 #   SNAPSHOT 1 = discard disk writes on exit (default: 0)
+#   SSH_PORT host port forwarded to the guest's ssh port 22 on 127.0.0.1
+#            (NET=user; default: none)
 #   TIMEOUT  seconds for 'exec'         (default: 60)
 #   QEMU_EXTRA  extra QEMU arguments (word-split)
 # ═════════════════════════════════════════════════════════════════════════════
@@ -77,6 +79,7 @@ NET=${NET:-user}
 ACCEL=${ACCEL:-auto}
 SNAPSHOT=${SNAPSHOT:-0}
 TIMEOUT=${TIMEOUT:-60}
+SSH_PORT=${SSH_PORT:-}
 VM_SOURCE=${VM_SOURCE:-release}
 VM_RELEASE=${VM_RELEASE:-latest}
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -152,7 +155,7 @@ qemu_args() {
 		echo -device; echo "$NINEP,fsdev=share0,mount_tag=share"
 	fi
 	if [ "$NET" = user ]; then
-		echo -netdev; echo user,id=net0
+		echo -netdev; echo "user,id=net0${SSH_PORT:+,hostfwd=tcp:127.0.0.1:$SSH_PORT-:22}"
 		echo -device; echo "$NIC,netdev=net0"
 	fi
 	for x in ${QEMU_EXTRA:-}; do echo "$x"; done
@@ -236,7 +239,8 @@ write_vm_sh() {
 		set -- KERNEL= VM_SOURCE="$VM_SOURCE" VM_RELEASE="$VM_RELEASE"
 	fi
 	env "$@" ARCH="$ARCH" INITRD="${INITRD:-}" DISK="$DISK_SET" VM_DIR="$VM_DIR" \
-		APPEND="${APPEND_SET:-}" MEM="$MEM" CPUS="$CPUS" "$HERE/write-vm-sh.sh"
+		APPEND="${APPEND_SET:-}" MEM="$MEM" CPUS="$CPUS" SSH_PORT="$SSH_PORT" \
+		"$HERE/write-vm-sh.sh"
 }
 
 # Forget the disk copy and the pinned release (recreate / delete)

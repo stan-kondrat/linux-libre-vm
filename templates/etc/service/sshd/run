@@ -1,0 +1,10 @@
+#!/bin/sh
+# OpenSSH server. Host keys are created on the first start, so every VM has
+# its own. root logs in with a key only: add it to /root/.ssh/authorized_keys
+# on the serial console (the image contains none).
+# -D: stay in the foreground (runsv supervises it); -e: log to stderr (svlogd)
+# All binaries are in /bin
+
+PATH=/bin
+ssh-keygen -A >/dev/null || exit 1
+exec /bin/sshd -D -e 2>&1

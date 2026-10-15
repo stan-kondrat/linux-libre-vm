@@ -7,8 +7,8 @@
 # where the repo is mounted at a different path (e.g. inside a build VM).
 #
 # Usage: write-vm-sh.sh   (reads VM_DIR, KERNEL, INITRD, DISK, APPEND, MEM,
-#                          CPUS, NET, ARCH, VM_SOURCE, VM_RELEASE from the
-#                          environment)
+#                          CPUS, NET, ARCH, VM_SOURCE, VM_RELEASE, SSH_PORT
+#                          from the environment)
 
 set -eu
 
@@ -51,6 +51,7 @@ add() { settings="$settings[ -n \"\${$1:-}\" ] || $1=$2
 [ -z "${APPEND:-}" ] || add APPEND "$(q "$APPEND")"
 [ -z "${MEM:-}" ] || add MEM "$(q "$MEM")"
 [ -z "${CPUS:-}" ] || add CPUS "$(q "$CPUS")"
+[ -z "${SSH_PORT:-}" ] || add SSH_PORT "$(q "$SSH_PORT")"
 # SHARE: only when chosen explicitly at create time ("none" = no sharing)
 case ${SHARE_SAVE:-} in
 "") ;;
@@ -76,7 +77,7 @@ HERE=\$(cd "\$(dirname "\$0")" && pwd)
 REPO=$repo_expr
 export VM_DIR="\$HERE"
 $settings
-export ARCH VM_SOURCE VM_RELEASE KERNEL INITRD DISK APPEND MEM CPUS SHARE 2>/dev/null || true
+export ARCH VM_SOURCE VM_RELEASE KERNEL INITRD DISK APPEND MEM CPUS SHARE SSH_PORT 2>/dev/null || true
 if [ -z "\${RUNNER:-}" ]; then
 	if [ "\$(uname -s)" = Darwin ]; then RUNNER=utm; else RUNNER=qemu; fi
 fi

@@ -41,7 +41,7 @@ endef
 # ── Per-package patch targets (declared once, not per-target) ──────────────
 
 PATCHED_PACKAGES := coreutils grep sed findutils diffutils gzip tar bash gawk \
-                    procps-ng util-linux vim iproute2 runit dhcpcd \
+                    procps-ng util-linux vim iproute2 runit dhcpcd openssl openssh \
                     linux-libre
 
 $(foreach p,$(PATCHED_PACKAGES),$(eval $(call PATCH_SRC_PKG,$(p))))

@@ -353,6 +353,7 @@ disk-image-dev:
 	mke2fs -F -q -t ext4 -b 4096 \
 	  -O ^metadata_csum,^orphan_file,^flex_bg,^huge_file,^dir_nlink \
 	  -d "$(ROOTFS_DEV)" "$(DISK_DIR)/disk-$(TC_ARCH)-dev.img"
+	$(CURDIR)/mk/chown-root.sh "$(ROOTFS_DEV)" "$(DISK_DIR)/disk-$(TC_ARCH)-dev.img"
 	e2fsck -fn "$(DISK_DIR)/disk-$(TC_ARCH)-dev.img" >/dev/null 2>&1 || true
 	tune2fs -f -i 0 -c 0 "$(DISK_DIR)/disk-$(TC_ARCH)-dev.img" >/dev/null 2>&1 || true
 	@echo "=== Dev disk image: $(DISK_DIR)/disk-$(TC_ARCH)-dev.img ==="

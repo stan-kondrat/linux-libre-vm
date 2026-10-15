@@ -89,6 +89,19 @@ cannot connect in). The image's `dhcpcd` runit service configures `eth0` by
 DHCP at boot (typically `10.0.2.15`); its log is in
 `/etc/service/dhcpcd/log/main/current`.
 
+## SSH
+
+The images run an OpenSSH server (root, key login only) with no keys in the
+image: add yours to `/root/.ssh/authorized_keys` on the serial console first
+(see the README's SSH section). The guest is not reachable from the host on
+QEMU's user-mode network; `SSH_PORT` forwards that host port on 127.0.0.1 to
+the guest's port 22 (`vm.sh` keeps it for later starts):
+
+```bash
+SSH_PORT=2222 make qemu-start
+ssh -p 2222 root@127.0.0.1
+```
+
 ## Script interface
 
 `make qemu-*` wraps `vm/qemu.sh`, which can also be used directly:

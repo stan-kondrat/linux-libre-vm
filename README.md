@@ -61,6 +61,8 @@ All third-party sources are managed as git submodules under `sources/` — **nev
 | util-linux | `https://git.kernel.org/pub/scm/utils/util-linux/util-linux.git` | `v2.40.4` | system utilities |
 | runit | `https://github.com/g-pape/runit/` | `v2.3.1` | init system |
 | dhcpcd | `https://github.com/NetworkConfiguration/dhcpcd.git` | `v10.3.2` | DHCP client |
+| openssl | `https://github.com/openssl/openssl.git` | `openssl-3.6.5` | libcrypto for OpenSSH |
+| openssh | `https://github.com/openssh/openssh-portable.git` | `V_10_6_P1` | ssh server + client |
 
 GCC, glibc, and binutils are host-provided (sources included for reference only).
 
@@ -196,9 +198,37 @@ sources/<pkg>  ──copy+patch──→  sources-patched/<pkg>/  (once)
 - **On x86_64 host:** x86_64 = native `gcc`, arm64 = `aarch64-linux-gnu-` cross
 - **On aarch64 host:** arm64 = native `gcc`, x86_64 = `x86_64-linux-gnu-` cross
 
-### Packages (15 userland + 1 kernel)
+### Packages (17 userland + 1 kernel)
 
-coreutils bash grep sed gawk findutils diffutils gzip tar vim iproute2 procps-ng util-linux runit dhcpcd
+coreutils bash grep sed gawk findutils diffutils gzip tar vim iproute2 procps-ng util-linux runit dhcpcd openssl openssh
+
+### SSH
+
+Both images run an OpenSSH server (OpenSSL's libcrypto built from the pinned
+source, nothing from the build host): root, key login only. The published
+image contains no passwords and no keys: root has no password (`*`; the
+serial console logs in without one), and host keys are created on each VM's
+first boot. To log in over ssh, add your key on the serial console first:
+
+```bash
+mkdir -p /root/.ssh && chmod 700 /root/.ssh
+echo 'ssh-rsa AAAA... you@host' >> /root/.ssh/authorized_keys
+chmod 600 /root/.ssh/authorized_keys
+```
+
+Then connect. QEMU's user-mode network is not reachable from the host:
+`SSH_PORT` makes `vm/qemu.sh` forward that host port (on 127.0.0.1) to the
+guest's port 22. UTM's shared network is: use the guest's address (`ip addr`
+on the console).
+
+```bash
+SSH_PORT=2222 make qemu-start && ssh -p 2222 root@127.0.0.1   # QEMU
+ssh root@<guest address>                                      # UTM
+```
+
+The disk image rules make every file owned by root (`mk/chown-root.sh`):
+`mke2fs -d` keeps the build user as owner, and sshd refuses keys under a
+`/root` it does not own.
 
 ### Patches
 
@@ -244,6 +274,7 @@ Shell: bash-5.3#
 | Item | Status |
 |------|--------|
 | Setuid binaries | ✅ None (no shadow/sudo/PAM) |
+| SSH | ✅ Key login only, no passwords; no keys in the image (added on the serial console) |
 | /proc mount | ✅ `nosuid,noexec,nodev` |
 | Seccomp | ✅ Built into both kernels (`CONFIG_SECCOMP_FILTER=y`) |
 | Non-free blobs | 0 ✅ |
@@ -268,7 +299,7 @@ Shell: bash-5.3#
 - x86_64 machine: QEMU q35 with virtio-pci (block + network), no ACPI
 - arm64 machine: QEMU virt with virtio-mmio (block) + virtio-pci (network)
 - Init: runit (statically linked) → PID 1
-- Services: getty on serial console (ttyS0 / ttyAMA0)
+- Services: getty on serial console (ttyS0 / ttyAMA0), dhcpcd, sshd
 - Rootfs: ext4 image, created via `mke2fs -d` (no loop devices, no root)
 - Boot: QEMU + kernel + raw disk image, no bootloader needed
 - Networking: QEMU slirp user-mode, dhcpcd

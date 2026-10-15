@@ -427,3 +427,72 @@ install-runit-$(1): build-runit-$(1)
 		[ -f "$$(BUILD_DIR_$(1))/runit/command/$$$$prog" ] && cp "$$(BUILD_DIR_$(1))/runit/command/$$$$prog" "$$(ROOTFS_$(1))/bin/"; \
 	done
 endef
+
+# ── OpenSSL (libcrypto only, for OpenSSH) ─────────────────────────────────
+# Built from the pinned source, so the image never gets the build host's
+# libcrypto. Only libcrypto.so.3 goes into the rootfs; headers and libraries
+# are staged in openssl-stage/ for the OpenSSH build. Everything OpenSSH
+# does not use is left out.
+OPENSSL_TARGET_x86_64 := linux-x86_64
+OPENSSL_TARGET_arm64  := linux-aarch64
+OPENSSL_CONFIGURE := shared no-apps no-docs no-tests no-legacy no-engine no-module \
+    no-quic no-comp no-ct no-ocsp no-cms no-ts no-srp no-rfc3779 \
+    no-sm2 no-sm3 no-sm4 no-camellia no-aria no-seed no-idea \
+    no-rc2 no-rc4 no-rc5 no-md4 no-mdc2 no-whirlpool no-bf no-cast
+
+define OPENSSL_BUILD_RULES
+$$(eval $$(call COPY_PKG,openssl,$(1)))
+
+build-openssl-$(1): $$(BUILD_DIR_$(1))/openssl/.built
+
+$$(BUILD_DIR_$(1))/openssl/.built: $$(BUILD_DIR_$(1))/openssl/.copied
+	@echo "=== Building openssl (libcrypto) for $(1) ==="
+	cd "$$(BUILD_DIR_$(1))/openssl" && ./Configure $$(OPENSSL_TARGET_$(1)) \
+	  $$(if $$(CROSS_$(1)),--cross-compile-prefix=$$(CROSS_$(1))) \
+	  --prefix=/usr --libdir=lib --openssldir=/etc/ssl $$(OPENSSL_CONFIGURE) \
+	  $$(COMMON_CFLAGS)
+	$$(MAKE) $$(PARALLEL) -C "$$(BUILD_DIR_$(1))/openssl" build_libs
+	rm -rf "$$(BUILD_DIR_$(1))/openssl-stage"
+	$$(MAKE) -C "$$(BUILD_DIR_$(1))/openssl" install_dev DESTDIR="$$(BUILD_DIR_$(1))/openssl-stage"
+	@touch "$$@"
+
+install-openssl-$(1): build-openssl-$(1)
+	mkdir -p "$$(ROOTFS_$(1))/lib"
+	cp -L "$$(BUILD_DIR_$(1))/openssl-stage/usr/lib/libcrypto.so.3" "$$(ROOTFS_$(1))/lib/"
+endef
+
+# ── OpenSSH (ssh, sshd, scp, sftp, ssh-keygen ...) ────────────────────────
+# Against the staged OpenSSL; no PAM, zlib, Kerberos, FIDO, PKCS#11 or
+# login records. Host keys are not generated here: the sshd service creates
+# them on first boot (every VM gets its own). Installed programs that a VM
+# does not need are removed in install-openssh.
+OPENSSH_CONFIGURE := --prefix=/usr --sysconfdir=/etc/ssh --libexecdir=/usr/libexec \
+    --with-privsep-path=/var/empty --with-privsep-user=sshd --with-pid-dir=/run \
+    --with-default-path=/usr/local/bin:/usr/bin:/bin \
+    --with-superuser-path=/usr/local/bin:/usr/bin:/usr/sbin:/bin:/sbin \
+    --without-pam --without-zlib --without-selinux --without-kerberos5 \
+    --without-libedit --without-audit --without-security-key-builtin --without-rpath \
+    --disable-security-key --disable-pkcs11 --disable-strip \
+    --disable-lastlog --disable-utmp --disable-utmpx --disable-wtmp --disable-wtmpx
+
+define OPENSSH_BUILD_RULES
+$$(eval $$(call COPY_PKG,openssh,$(1)))
+
+build-openssh-$(1): $$(BUILD_DIR_$(1))/openssh/.built
+
+$$(BUILD_DIR_$(1))/openssh/.built: $$(BUILD_DIR_$(1))/openssh/.copied $$(BUILD_DIR_$(1))/openssl/.built
+	@echo "=== Building openssh for $(1) ==="
+	cd "$$(BUILD_DIR_$(1))/openssh" && autoreconf -fi
+	cd "$$(BUILD_DIR_$(1))/openssh" && ./configure $$(call HOST_FLAG,$(1)) \
+	  $$(OPENSSH_CONFIGURE) --with-ssl-dir="$$(BUILD_DIR_$(1))/openssl-stage/usr" \
+	  CFLAGS="$$(COMMON_CFLAGS)" LDFLAGS="$$(COMMON_LDFLAGS)"
+	$$(MAKE) $$(PARALLEL) -C "$$(BUILD_DIR_$(1))/openssh"
+	@touch "$$@"
+
+install-openssh-$(1): build-openssh-$(1) install-openssl-$(1)
+	$$(MAKE) -C "$$(BUILD_DIR_$(1))/openssh" DESTDIR="$$(ROOTFS_$(1))" install-nokeys
+	cd "$$(ROOTFS_$(1))" && rm -f usr/bin/ssh-keyscan usr/libexec/ssh-keysign \
+	  usr/libexec/ssh-pkcs11-helper usr/libexec/ssh-sk-helper
+	mkdir -p "$$(ROOTFS_$(1))/var/empty"
+	chmod 755 "$$(ROOTFS_$(1))/var/empty"
+endef

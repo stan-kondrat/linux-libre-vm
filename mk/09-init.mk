@@ -34,6 +34,12 @@ install-init-$(1):
 	cp "$$$${T}/etc/service/dhcpcd/run" "$$$${DD}/run"; \
 	cp "$$$${T}/etc/service/dhcpcd/log/run" "$$$${DD}/log/run"; \
 	chmod 755 "$$$${DD}/run" "$$$${DD}/log/run"; \
+	SD="$$$${R}/etc/service/sshd"; \
+	mkdir -p "$$$${SD}/log/main" "$$$${R}/etc/ssh"; \
+	cp "$$$${T}/etc/service/sshd/run" "$$$${SD}/run"; \
+	cp "$$$${T}/etc/service/sshd/log/run" "$$$${SD}/log/run"; \
+	chmod 755 "$$$${SD}/run" "$$$${SD}/log/run"; \
+	cp "$$$${T}/etc/ssh/sshd_config" "$$$${R}/etc/ssh/sshd_config"; \
 	ln -sf /bin/bash "$$$${R}/bin/sh" 2>/dev/null || true; \
 	for prog in poweroff reboot halt shutdown console-shell; do \
 	  cp "$$$${T}/bin/$$$${prog}" "$$$${R}/bin/$$$${prog}"; \
@@ -43,7 +49,9 @@ install-init-$(1):
 	         "$$$${R}/root" "$$$${R}/home" "$$$${R}/tmp" \
 	         "$$$${R}/proc" "$$$${R}/sys" "$$$${R}/dev" "$$$${R}/run" \
 	         "$$$${R}/var/log" "$$$${R}/var/run" "$$$${R}/var/db" \
-	         "$$$${R}/var/spool" "$$$${R}/var/tmp" "$$$${R}/var/lock"
+	         "$$$${R}/var/spool" "$$$${R}/var/tmp" "$$$${R}/var/lock" "$$$${R}/var/empty"; \
+	chmod 700 "$$$${R}/root"; \
+	chmod 755 "$$$${R}/var/empty"
 	@echo "=== Init system installed ($(1)) ==="
 endef
 
