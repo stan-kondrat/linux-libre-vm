@@ -1,28 +1,22 @@
 # ═════════════════════════════════════════════════════════════════════════════
-# Test targets
+# Test targets: boot the built image under QEMU and check it
+# (scripts/smoke-test.sh — the same checks CI runs). Each fails on a failure.
+#   make test               base images of all BUILD_ARCHS
+#   make test-<arch>        one base image
+#   make test-dev           the dev image of this host (mk/14-toolchain.mk)
 # ═════════════════════════════════════════════════════════════════════════════
 
-test-dhcpcd-x86_64:
-	@echo "=== DHCP test (x86_64) ==="
-	timeout 10 $(MAKE) BOOT_DIAG=1 qemu-x86_64 2>&1 || true
+.PHONY: test test-dev $(addprefix test-,$(TARGETS))
 
-test-dhcpcd-arm64:
-	@echo "=== DHCP test (arm64) ==="
-	timeout 10 $(MAKE) BOOT_DIAG=1 qemu-arm64 2>&1 || true
+define TEST_RULE
+test-$(1):
+	ARCH=$(1) KERNEL="$(call KERNEL_OUT,$(1))" DISK="$(DISK_DIR)/disk-$(1).img" scripts/smoke-test.sh
+endef
 
-test-dhcpcd: $(addprefix test-dhcpcd-,$(BUILD_ARCHS))
-	@echo "=== DHCP tests complete ==="
+$(foreach t,$(TARGETS),$(eval $(call TEST_RULE,$(t))))
 
-test-shutdown-x86_64:
-	@echo "=== Shutdown test (x86_64) ==="
-	timeout 6 $(MAKE) qemu-x86_64 2>&1 || true
+test: $(addprefix test-,$(BUILD_ARCHS))
 
-test-shutdown-arm64:
-	@echo "=== Shutdown test (arm64) ==="
-	timeout 6 $(MAKE) qemu-arm64 2>&1 || true
-
-test-shutdown: $(addprefix test-shutdown-,$(BUILD_ARCHS))
-	@echo "=== Shutdown tests complete ==="
-
-test: test-dhcpcd test-shutdown
-	@echo "=== All tests complete ==="
+test-dev:
+	ARCH=$(TC_ARCH) KERNEL="$(call KERNEL_OUT,$(TC_ARCH))" DISK="$(DISK_DIR)/disk-$(TC_ARCH)-dev.img" \
+	  PROFILE=dev scripts/smoke-test.sh

@@ -1,0 +1,428 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# Dev image: native toolchain (incl. Python, Node.js) and cross toolchains,
+# for both hosts (see docs/ci-dev.md)
+#
+# Each host (x86_64, arm64) builds on a runner of its own architecture: the
+# toolchain targets are native only. Every job caches its output under a key
+# made from exactly its inputs:
+#
+#   base       userland + kernel             sources-patched, sources-build/<arch>
+#   toolchain  make toolchain                $TOOLCHAIN_WORK/{stamps,root,deps,pybin}
+#   cross      cross-toolchain TARGET=<t>    $TOOLCHAIN_WORK/cross/<t>  (×7)
+#
+# The toolchain job may not finish within GitHub's 6-hour job limit (Node.js
+# alone takes hours): it stops itself in time and saves the stages it
+# finished; "Re-run failed jobs" continues from there.
+#
+# `assemble` restores every cache (no stage output is passed as an artifact),
+# builds the dev image and checks it (scripts/smoke-test.sh PROFILE=dev).
+# A `dev-*` tag also publishes a release. Caches of `main` are visible to tag
+# runs: run the workflow on main first, then push the tag.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+name: Build dev image
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["dev-*"]
+
+concurrency:
+  group: ${{ github.ref }}-${{ github.workflow }}
+  cancel-in-progress: false
+
+env:
+  # Same fixed path in every job: pybin/ links into root/ by absolute path,
+  # and the cross prefixes and stamps are tied to their paths
+  TOOLCHAIN_WORK: /home/runner/tc
+
+jobs:
+  # ── Cache keys ──────────────────────────────────────────────────────────────
+  # Submodule commits come from the index (no fetch needed), files by content.
+  keys:
+    name: Cache keys
+    runs-on: ubuntu-24.04
+    outputs:
+      base: ${{ steps.k.outputs.base }}
+      toolchain: ${{ steps.k.outputs.toolchain }}
+      cross: ${{ steps.k.outputs.cross }}
+      submodules: ${{ steps.k.outputs.submodules }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - id: k
+        run: |
+          T=sources/toolchain
+          sm() { for p in "$@"; do echo "$p $(git rev-parse "HEAD:$p")"; done; }
+          h() { sha256sum | cut -c1-24; }
+          base=$( { git ls-tree -r HEAD sources | grep -v "	$T/"
+                    find sources-patches templates -type f | sort | xargs sha256sum
+                    sha256sum mk/0*.mk mk/*.sh kernel-*.config; } | h)
+          toolchain=$( { sm $T/binutils $T/gcc $T/glibc $T/bc $T/perl $T/python $T/node sources/linux-libre
+                         sha256sum mk/00-vars.mk mk/14-toolchain.mk scripts/fetch-toolchain.sh; } | h)
+          cross=$( { sm $T/binutils $T/gcc $T/glibc sources/linux-libre
+                     sha256sum mk/00-vars.mk mk/14-toolchain.mk mk/15-cross-toolchain.mk scripts/fetch-toolchain.sh; } | h)
+          # Same key as the submodule cache in build-release.yml (one shared entry)
+          submodules=$(git ls-tree -r HEAD sources | grep -v "	$T/" | sha256sum | cut -c1-24)
+          for v in base toolchain cross submodules; do echo "$v=${!v}" | tee -a "$GITHUB_OUTPUT"; done
+
+  # ── base: userland + kernel, native ─────────────────────────────────────────
+  base:
+    name: Base (${{ matrix.arch }})
+    needs: keys
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x86_64, runner: ubuntu-24.04 }
+          - { arch: arm64, runner: ubuntu-24.04-arm }
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - id: cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            sources-patched
+            sources-build/${{ matrix.arch }}
+          key: dev-base-${{ matrix.arch }}-${{ needs.keys.outputs.base }}
+      - if: steps.cache.outputs.cache-hit != 'true'
+        uses: ./.github/actions/setup-host
+        with:
+          build: true
+      # Base submodule checkouts (shared with build-release.yml): the build
+      # directories link into sources/ (gnulib's bootstrap symlinks
+      # GNUmakefile, maint.mk ... to sources/gnulib), so they are needed to
+      # install from a restored build, not only to build
+      - if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache@v4
+        with:
+          path: |
+            sources/*
+            !sources/toolchain
+          key: submodules-${{ needs.keys.outputs.submodules }}
+          restore-keys: submodules-
+      - name: Build userland + kernel
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          scripts/fetch-submodules.sh
+          make ARCH=${{ matrix.arch }} check-env
+          make ARCH=${{ matrix.arch }} userland-${{ matrix.arch }}
+          make ARCH=${{ matrix.arch }} kernel
+
+  # ── toolchain: native, resumable ────────────────────────────────────────────
+  # Saved under a unique key after every attempt, restored by prefix: a run
+  # that hit the time limit leaves its finished stages for the next one.
+  toolchain:
+    name: Toolchain (${{ matrix.arch }})
+    needs: keys
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 355
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x86_64, runner: ubuntu-24.04 }
+          - { arch: arm64, runner: ubuntu-24.04-arm }
+    env:
+      PREFIX: dev-toolchain-${{ matrix.arch }}-${{ needs.keys.outputs.toolchain }}-
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - id: restore
+        uses: actions/cache/restore@v4
+        with:
+          path: &tc-paths |
+            ${{ env.TOOLCHAIN_WORK }}/stamps
+            ${{ env.TOOLCHAIN_WORK }}/root
+            ${{ env.TOOLCHAIN_WORK }}/deps
+            ${{ env.TOOLCHAIN_WORK }}/pybin
+          key: ${{ env.PREFIX }}${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: ${{ env.PREFIX }}
+      - id: done
+        name: Already complete?
+        run: |
+          if [ -f "$TOOLCHAIN_WORK/stamps/node" ] && make -q toolchain-stamps 2>/dev/null; then
+            echo "complete=true" >> "$GITHUB_OUTPUT"; echo "all stages cached"
+          fi
+      - if: steps.done.outputs.complete != 'true'
+        uses: ./.github/actions/setup-host
+        with:
+          free-disk: true
+          toolchain: true
+      - name: Build (stops after 5 h 25 min, saving what is done)
+        id: build
+        if: steps.done.outputs.complete != 'true'
+        run: |
+          scripts/fetch-submodules.sh sources/linux-libre
+          scripts/fetch-toolchain.sh
+          timeout --signal=TERM 325m make toolchain || { echo "::error::toolchain incomplete (failed or time limit): re-run to continue"; exit 1; }
+      - name: Save finished stages
+        if: always() && steps.done.outputs.complete != 'true' && steps.build.outcome != 'skipped'
+        uses: actions/cache/save@v4
+        with:
+          path: *tc-paths
+          key: ${{ env.PREFIX }}${{ github.run_id }}-${{ github.run_attempt }}
+
+  # ── cross: one job per host and target ──────────────────────────────────────
+  cross:
+    name: Cross ${{ matrix.target }} (${{ matrix.host.arch }})
+    needs: keys
+    runs-on: ${{ matrix.host.runner }}
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        host:
+          - { arch: x86_64, runner: ubuntu-24.04 }
+          - { arch: arm64, runner: ubuntu-24.04-arm }
+        target: [arm64, x86_64, armv6, armv7, riscv64, i686, i686-sse2]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - id: cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.TOOLCHAIN_WORK }}/cross/${{ matrix.target }}
+          key: dev-cross-${{ matrix.target }}-${{ matrix.host.arch }}-${{ needs.keys.outputs.cross }}
+      - if: steps.cache.outputs.cache-hit != 'true'
+        uses: ./.github/actions/setup-host
+        with:
+          toolchain: true
+      - name: Build and test
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          scripts/fetch-submodules.sh sources/linux-libre
+          scripts/fetch-toolchain.sh sources/toolchain/binutils sources/toolchain/gcc sources/toolchain/glibc
+          make TARGET=${{ matrix.target }} cross-toolchain cross-toolchain-test
+
+  # ── assemble: dev rootfs + disk image, smoke test ───────────────────────────
+  assemble:
+    name: Assemble (${{ matrix.arch }})
+    needs: [keys, base, toolchain, cross]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x86_64, runner: ubuntu-24.04 }
+          - { arch: arm64, runner: ubuntu-24.04-arm }
+    env:
+      CK: ${{ needs.keys.outputs.cross }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - uses: ./.github/actions/setup-host
+        with:
+          free-disk: true
+          build: true
+          qemu: true
+      # Base submodule checkouts (shared with build-release.yml): the build
+      # directories link into sources/ (gnulib's bootstrap symlinks
+      # GNUmakefile, maint.mk ... to sources/gnulib), so they are needed to
+      # install from a restored build, not only to build
+      - uses: actions/cache@v4
+        with:
+          path: |
+            sources/*
+            !sources/toolchain
+          key: submodules-${{ needs.keys.outputs.submodules }}
+          restore-keys: submodules-
+      - name: Fetch base submodules
+        run: scripts/fetch-submodules.sh
+
+      # A miss fails the job. Path lists must match the saving jobs.
+      - uses: actions/cache/restore@v4
+        with:
+          path: |
+            sources-patched
+            sources-build/${{ matrix.arch }}
+          key: dev-base-${{ matrix.arch }}-${{ needs.keys.outputs.base }}
+          fail-on-cache-miss: true
+      - uses: actions/cache/restore@v4
+        with:
+          path: |
+            ${{ env.TOOLCHAIN_WORK }}/stamps
+            ${{ env.TOOLCHAIN_WORK }}/root
+            ${{ env.TOOLCHAIN_WORK }}/deps
+            ${{ env.TOOLCHAIN_WORK }}/pybin
+          key: dev-toolchain-${{ matrix.arch }}-${{ needs.keys.outputs.toolchain }}-
+          restore-keys: dev-toolchain-${{ matrix.arch }}-${{ needs.keys.outputs.toolchain }}-
+          fail-on-cache-miss: true
+      - uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.TOOLCHAIN_WORK }}/cross/arm64
+          key: dev-cross-arm64-${{ matrix.arch }}-${{ env.CK }}
+          fail-on-cache-miss: true
+      - uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.TOOLCHAIN_WORK }}/cross/x86_64
+          key: dev-cross-x86_64-${{ matrix.arch }}-${{ env.CK }}
+          fail-on-cache-miss: true
+      - uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.TOOLCHAIN_WORK }}/cross/armv6
+          key: dev-cross-armv6-${{ matrix.arch }}-${{ env.CK }}
+          fail-on-cache-miss: true
+      - uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.TOOLCHAIN_WORK }}/cross/armv7
+          key: dev-cross-armv7-${{ matrix.arch }}-${{ env.CK }}
+          fail-on-cache-miss: true
+      - uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.TOOLCHAIN_WORK }}/cross/riscv64
+          key: dev-cross-riscv64-${{ matrix.arch }}-${{ env.CK }}
+          fail-on-cache-miss: true
+      - uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.TOOLCHAIN_WORK }}/cross/i686
+          key: dev-cross-i686-${{ matrix.arch }}-${{ env.CK }}
+          fail-on-cache-miss: true
+      - uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.TOOLCHAIN_WORK }}/cross/i686-sse2
+          key: dev-cross-i686-sse2-${{ matrix.arch }}-${{ env.CK }}
+          fail-on-cache-miss: true
+
+      # make must find every stage up to date and build nothing: check the
+      # stamp files first (make -q), to fail loudly instead of starting an
+      # hours-long rebuild
+      - name: Check that all stages are cached
+        run: |
+          make -q toolchain-stamps || { echo "::error::toolchain stages missing or out of date"; make -n toolchain-stamps | head -20; exit 1; }
+          for t in arm64 x86_64 armv6 armv7 riscv64 i686 i686-sse2; do
+            f=$TOOLCHAIN_WORK/cross/$t/stamps/gcc
+            make -q TARGET=$t "$f" || { echo "::error::$f not up to date"; make -n TARGET=$t "$f" | head -20; exit 1; }
+          done
+
+      - name: Dev rootfs + disk image
+        run: |
+          make install-dev disk-image-dev
+          for t in arm64 x86_64 armv6 armv7 riscv64 i686 i686-sse2; do
+            make --no-print-directory TARGET=$t cross-toolchain-dist
+          done
+          ls -lhs disks/
+
+      - name: Stage release files
+        run: |
+          A=${{ matrix.arch }}
+          K=sources-build/$A/linux-libre
+          mkdir -p release
+          mv disks/disk-$A-dev.img release/linux-libre-vm-dev-$A.img
+          if [ "$A" = x86_64 ]; then cp $K/arch/x86/boot/bzImage release/linux-libre-vmlinuz-dev-$A
+          else cp $K/arch/arm64/boot/Image.gz release/linux-libre-vmlinuz-dev-$A; fi
+          cp "$TOOLCHAIN_WORK"/cross/dist/cross-*.tar.gz release/
+          {
+            echo "linux-libre-vm dev image $A"
+            echo "commit:  $(git rev-parse HEAD) ($(git describe --tags --always 2>/dev/null))"
+            echo "built:   $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "runner:  ${ImageOS:-?} ${ImageVersion:-?} ($(uname -m)), host gcc $(gcc -dumpfullversion)"
+            echo; echo "## Toolchain sources (submodule commits)"
+            git ls-tree HEAD sources/toolchain/ sources/linux-libre | awk '{ print $3, $4 }'
+            echo; echo "## Cross toolchains"
+            for f in "$TOOLCHAIN_WORK"/cross/*/*/BUILD-INFO; do echo; cat "$f"; done
+            echo; echo "## Sizes"
+            du -sh "$TOOLCHAIN_WORK/rootfs-dev" "$TOOLCHAIN_WORK"/cross/*/*-linux-* 2>/dev/null
+          } > release/MANIFEST-dev-$A.txt
+          cat release/MANIFEST-dev-$A.txt
+
+      - name: Smoke test
+        env:
+          ARCH: ${{ matrix.arch }}
+          KERNEL: release/linux-libre-vmlinuz-dev-${{ matrix.arch }}
+          DISK: release/linux-libre-vm-dev-${{ matrix.arch }}.img
+          PROFILE: dev
+          TIMEOUT: 900    # TCG when the runner has no KVM
+        run: scripts/smoke-test.sh
+
+      - name: QEMU log
+        if: failure()
+        run: cat build/qemu/*/qemu.log || true
+
+      # Release assets are limited to 2 GiB: split the compressed image if needed
+      - name: Compress
+        run: |
+          cd release
+          xz -T0 -6 linux-libre-vm-dev-${{ matrix.arch }}.img
+          f=linux-libre-vm-dev-${{ matrix.arch }}.img.xz
+          if [ "$(stat -c %s $f)" -gt 2000000000 ]; then
+            split -b 1900M -d $f $f.part && rm $f
+          fi
+          ls -lh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dev-${{ matrix.arch }}
+          path: release/
+          if-no-files-found: error
+          retention-days: 7
+
+  # ── release (dev-* tags) ────────────────────────────────────────────────────
+  release:
+    name: Create GitHub Release
+    if: startsWith(github.ref, 'refs/tags/dev-')
+    needs: assemble
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: dev-*
+          path: release/
+          merge-multiple: true
+
+      # gcc, glibc, binutils, ... are GPL/LGPL: publish the exact source the
+      # toolchains were built from (submodules + pinned tarballs)
+      - name: Toolchain source tarball
+        run: |
+          scripts/fetch-submodules.sh sources/linux-libre
+          scripts/fetch-toolchain.sh
+          tar --exclude=.git --sort=name --owner=0 --group=0 --numeric-owner \
+            --mtime="@$(git log -1 --format=%ct)" \
+            --transform "s|^|linux-libre-vm-${GITHUB_REF_NAME}/|" \
+            -cf - Makefile README.md mk scripts kernel-*.config docs sources/toolchain sources/linux-libre |
+            xz -T0 -6 > release/linux-libre-vm-dev-src-${GITHUB_REF_NAME}.tar.xz
+
+      - name: Checksums
+        working-directory: release
+        run: |
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
+          ls -lh
+
+      - name: Release notes
+        run: |
+          cat > notes.md <<EOF
+          Dev images: the base image plus a toolchain built from pinned sources
+          (gcc, binutils, glibc, make, perl, Python, Node.js) and cross compilers
+          for seven targets under \`/opt/cross\`. See
+          [docs/ci-dev.md](https://github.com/${GITHUB_REPOSITORY}/blob/${GITHUB_REF_NAME}/docs/ci-dev.md).
+
+          | File | Content |
+          |------|---------|
+          | \`linux-libre-vm-dev-<arch>.img.xz\` | dev disk image (8 GB when unpacked; \`.partNN\` pieces: \`cat\` them together) |
+          | \`linux-libre-vmlinuz-dev-<arch>\` | kernel to boot it |
+          | \`cross-<triplet>.<host arch>.tar.gz\` | each cross toolchain on its own, relocatable |
+          | \`MANIFEST-dev-<arch>.txt\` | source commits, build host, sizes |
+          | \`linux-libre-vm-dev-src-*.tar.xz\` | corresponding source |
+          EOF
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: Dev image ${{ github.ref_name }}
+          body_path: notes.md
+          files: release/*
+          prerelease: true

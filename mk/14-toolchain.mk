@@ -25,7 +25,7 @@
 #   make toolchain TOOLCHAIN_WORK=/var/tmp/toolchain
 # ═════════════════════════════════════════════════════════════════════════════
 
-.PHONY: toolchain install-dev disk-image-dev toolchain-clean
+.PHONY: toolchain toolchain-stamps install-dev disk-image-dev toolchain-clean
 
 TC_ARCH         := $(if $(filter aarch64,$(HOST_ARCH)),arm64,$(if $(filter x86_64,$(HOST_ARCH)),x86_64))
 TC_SRC          := $(SOURCES_DIR)/toolchain
@@ -110,11 +110,15 @@ tc_linux_headers = rm -rf "$(2)" && \
 	mkdir -p "$(3)" && (cd "$(2)/usr" && find include -name '*.h' | tar -cf - -T -) | tar -x -C "$(3)" && \
 	rm -rf "$(2)"
 
-toolchain: $(TC_STAMP)/linux-headers $(TC_STAMP)/glibc $(TC_STAMP)/binutils \
-           $(TC_STAMP)/gcc $(TC_STAMP)/make $(TC_STAMP)/m4 $(TC_STAMP)/bison \
-           $(TC_STAMP)/flex $(TC_STAMP)/bc $(TC_STAMP)/perl \
-           $(TC_STAMP)/zlib $(TC_STAMP)/bzip2 $(TC_STAMP)/python $(TC_STAMP)/node
+TC_STAMPS := $(addprefix $(TC_STAMP)/,linux-headers glibc binutils gcc make m4 bison \
+               flex bc perl zlib bzip2 python node)
+
+toolchain: $(TC_STAMPS)
 	@echo "=== Toolchain ($(TC_ARCH)) staged in $(TC_ROOT) ==="
+
+# The same without a recipe: `make -q toolchain-stamps` tells whether every
+# stage is built (CI checks restored caches with it)
+toolchain-stamps: $(TC_STAMPS)
 
 $(TC_STAMP)/.check:
 	@[ -n "$(TC_ARCH)" ] || { echo "toolchain: unsupported host ($(HOST_ARCH)); needs a Linux aarch64 or x86_64 host"; exit 1; }
@@ -346,17 +350,7 @@ install-dev: toolchain cross-toolchains
 
 disk-image-dev:
 	@[ -d "$(ROOTFS_DEV)" ] || { echo "disk-image-dev: run 'make install-dev' first"; exit 1; }
-	@echo "=== Creating dev disk image ($(DEV_DISK_SIZE_MB) MB, sparse) ==="
-	mkdir -p "$(DISK_DIR)"
-	rm -f "$(DISK_DIR)/disk-$(TC_ARCH)-dev.img"
-	truncate -s $(DEV_DISK_SIZE_MB)M "$(DISK_DIR)/disk-$(TC_ARCH)-dev.img"
-	mke2fs -F -q -t ext4 -b 4096 \
-	  -O ^metadata_csum,^orphan_file,^flex_bg,^huge_file,^dir_nlink \
-	  -d "$(ROOTFS_DEV)" "$(DISK_DIR)/disk-$(TC_ARCH)-dev.img"
-	$(CURDIR)/mk/chown-root.sh "$(ROOTFS_DEV)" "$(DISK_DIR)/disk-$(TC_ARCH)-dev.img"
-	e2fsck -fn "$(DISK_DIR)/disk-$(TC_ARCH)-dev.img" >/dev/null 2>&1 || true
-	tune2fs -f -i 0 -c 0 "$(DISK_DIR)/disk-$(TC_ARCH)-dev.img" >/dev/null 2>&1 || true
-	@echo "=== Dev disk image: $(DISK_DIR)/disk-$(TC_ARCH)-dev.img ==="
+	$(CURDIR)/mk/mkimage.sh "$(ROOTFS_DEV)" "$(DISK_DIR)/disk-$(TC_ARCH)-dev.img" $(DEV_DISK_SIZE_MB)
 
 toolchain-clean:
 	rm -rf "$(TOOLCHAIN_WORK)" "$(ROOTFS_DEV)"

@@ -1,9 +1,9 @@
 # ═════════════════════════════════════════════════════════════════════════════
-# Phase 5.5 — Disk image + QEMU test
+# Phase 5.5 — Disk image + QEMU boot
 # ═════════════════════════════════════════════════════════════════════════════
 #
-# Disk image: raw ext4 (no MBR), kernel mounts via root=/dev/vda.
-# Uses mke2fs -d to copy rootfs into the image in one pass.
+# Disk image: raw ext4 (no partition table), kernel mounts root=/dev/vda.
+# mk/mkimage.sh builds it (also for the dev image, mk/14-toolchain.mk).
 # ═════════════════════════════════════════════════════════════════════════════
 
 DISK_SIZE_MB := 256
@@ -11,22 +11,7 @@ DISK_DIR     := $(CURDIR)/disks
 
 define DISK_IMAGE_RULE
 disk-image-$(1):
-	@echo "=== Creating disk image for $(1) ==="
-	mkdir -p "$(DISK_DIR)"
-	rm -f "$(DISK_DIR)/disk-$(1).img"
-	dd if=/dev/zero of="$(DISK_DIR)/disk-$(1).img" bs=1M count=$(DISK_SIZE_MB) status=none
-	# mke2fs with stable features (no metadata_csum/orphan_file to avoid corruption)
-	mke2fs -F -q -t ext4 -b 4096 \
-	  -O ^metadata_csum,^orphan_file,^flex_bg,^huge_file,^dir_nlink \
-	  -d "$(ROOTFS_$(1))" \
-	  "$(DISK_DIR)/disk-$(1).img" 2>/dev/null
-	# Every file owned by root (the rootfs was staged by the build user)
-	$(CURDIR)/mk/chown-root.sh "$(ROOTFS_$(1))" "$(DISK_DIR)/disk-$(1).img"
-	# Run fsck to ensure clean filesystem
-	e2fsck -fn "$(DISK_DIR)/disk-$(1).img" > /dev/null 2>&1 || true
-	tune2fs -f -i 0 -c 0 "$(DISK_DIR)/disk-$(1).img" > /dev/null 2>&1 || true
-	@echo "=== Disk image: $(DISK_DIR)/disk-$(1).img ==="
-	du -sh "$(DISK_DIR)/disk-$(1).img"
+	$(CURDIR)/mk/mkimage.sh "$(ROOTFS_$(1))" "$(DISK_DIR)/disk-$(1).img" $(DISK_SIZE_MB)
 
 disk-image-fsck-$(1):
 	e2fsck -fvy "$(DISK_DIR)/disk-$(1).img"
@@ -35,7 +20,6 @@ endef
 $(foreach t,$(TARGETS),$(eval $(call DISK_IMAGE_RULE,$(t))))
 
 disk-image: $(addprefix disk-image-,$(BUILD_ARCHS))
-	@echo "=== All disk images created ==="
 
 disk-image-clean:
 	rm -rf $(DISK_DIR)

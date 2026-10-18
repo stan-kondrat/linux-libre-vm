@@ -129,24 +129,52 @@ SHELL := $(CURDIR)/mk/tee-log.sh
 endif
 
 # ── Common build flags ─────────────────────────────────────────────────────
-COMMON_CFLAGS   := -O2 -pipe -fomit-frame-pointer -s
+# Hardening: stack protector, fortified libc calls, full RELRO. The source
+# path is mapped to "." so it does not end up in the binaries.
+COMMON_CFLAGS   := -O2 -pipe -fomit-frame-pointer -fstack-protector-strong \
+                   -D_FORTIFY_SOURCE=2 -ffile-prefix-map=$(CURDIR)=.
 COMMON_LDFLAGS  := -s -Wl,--as-needed,-z,relro,-z,now
+
+# Timestamps written into the build output (images, archives) come from the
+# last commit, not the build time
+SOURCE_DATE_EPOCH ?= $(shell git -C "$(CURDIR)" log -1 --format=%ct 2>/dev/null || echo 0)
+export SOURCE_DATE_EPOCH
 
 USERLAND_CONFIG := \
     --prefix=/usr \
     --disable-nls \
     --disable-silent-rules
 
-# Per-package/architecture extra configure flags
-# Usage: $(PKG)_CONFIGURE_$(ARCH) = --extra-flag
-# The variable name is constructed from the package name (with hyphens) and arch:
-#   $$($$(1)_CONFIGURE_$(2)) in build macros
-procps-ng_CONFIGURE_arm64 := --without-ncurses
+# Per-package configure flags: <pkg>_CONFIGURE (all arches) and
+# <pkg>_CONFIGURE_<arch>, used as $($(1)_CONFIGURE) $($(1)_CONFIGURE_$(2))
+# in the build macros.
+#
+# Optional features are switched off here explicitly. Left to configure, they
+# depend on what the build host has installed (OpenSSL, GMP, PAM, readline,
+# PCRE2, libelf ...): a native build picked them up and a cross build did not,
+# so the two images differed, and the host's libraries were copied in.
+coreutils_CONFIGURE := --with-openssl=no --without-libgmp --disable-acl --disable-xattr \
+    --disable-libcap --disable-libsmack --without-selinux
+grep_CONFIGURE      := --disable-perl-regexp
+sed_CONFIGURE       := --disable-acl --without-selinux
+findutils_CONFIGURE := --without-selinux
+tar_CONFIGURE       := --without-posix-acls --without-selinux --without-xattrs
+gawk_CONFIGURE      := --disable-mpfr --without-readline --disable-extensions
+procps-ng_CONFIGURE := --without-systemd --without-elogind --disable-static
 # util-linux: skip chown/chgrp/setuid in "make install" (needs root; the build
-# runs as a normal user and installs into a DESTDIR)
-# No Python bindings (the image has no Python). Cross builds: no ncurses either,
-# configure would find the build host's (pkg-config) and fail to link -ltinfo
-UTIL_LINUX_CONFIGURE = --disable-makeinstall-chown --disable-makeinstall-setuid \
-    --without-python $(if $(CROSS_$(1)),--without-ncursesw --without-ncurses --without-tinfo)
-util-linux_CONFIGURE_x86_64 := $(call UTIL_LINUX_CONFIGURE,x86_64)
-util-linux_CONFIGURE_arm64  := $(call UTIL_LINUX_CONFIGURE,arm64)
+# runs as a normal user and installs into a DESTDIR). No login/su/chfn/chsh/
+# runuser (they need PAM; the console logs in as root directly).
+util-linux_CONFIGURE := --disable-makeinstall-chown --disable-makeinstall-setuid \
+    --without-python --without-readline --without-systemd --without-udev \
+    --without-libmagic --without-cap-ng --without-econf --without-selinux \
+    --without-audit --without-smack --without-btrfs --without-user \
+    --disable-login --disable-su --disable-chfn-chsh --disable-runuser \
+    --disable-sulogin --disable-newgrp --disable-pam-lastlog2 \
+    --disable-bash-completion --disable-static
+# ncurses is the one feature still left to the build: cross builds go without
+# (configure would find the build host's via pkg-config and fail to link
+# -ltinfo), native builds use the host's. Building the userland with the
+# project's own toolchains (docs/cross-toolchains.md) would remove this.
+NO_NCURSES = $(if $(CROSS_$(1)),--without-ncursesw --without-ncurses --without-tinfo)
+$(foreach a,$(TARGETS),$(eval procps-ng_CONFIGURE_$(a) := $(call NO_NCURSES,$(a))))
+$(foreach a,$(TARGETS),$(eval util-linux_CONFIGURE_$(a) := $(call NO_NCURSES,$(a))))

@@ -26,24 +26,26 @@ $(foreach t,$(TARGETS),$(eval $(call RUNIT_BUILD_RULES,$(t))))
 $(foreach t,$(TARGETS),$(eval $(call OPENSSL_BUILD_RULES,$(t))))
 $(foreach t,$(TARGETS),$(eval $(call OPENSSH_BUILD_RULES,$(t))))
 
+# ── Aliases: <pkg> builds it for all targets ───────────────────────────────
 
-# ═════════════════════════════════════════════════════════════════════════════
-# Aliases and aggregates (USERLAND_PKGS: mk/00-vars.mk)
-# ═════════════════════════════════════════════════════════════════════════════
-
-# <pkg>: build it for all targets
+.PHONY: $(USERLAND_PKGS)
 $(foreach p,$(USERLAND_PKGS),$(eval $(p): $(addprefix build-$(p)-,$(TARGETS))))
+
+# ── Aggregates ─────────────────────────────────────────────────────────────
 
 $(foreach a,$(TARGETS),$(eval userland-$(a): $(addprefix build-,$(addsuffix -$(a),$(USERLAND_PKGS)))))
 
 userland: $(addprefix userland-,$(BUILD_ARCHS))
-	@echo "=== All userland packages built (all targets) ==="
 
 all: check-env build-dirs userland
 
 build: check-env build-dirs userland kernel
-	@echo "=== All packages + kernel built for all targets ==="
-	@echo "  Run 'make install' to install all, or 'make ARCH=x86_64 install' / 'make ARCH=arm64 install'"
+	@echo "=== Userland + kernel built: $(BUILD_ARCHS) ==="
+	@echo "  Next: make install disk-image"
+
+install-all: $(addprefix install-,$(BUILD_ARCHS))
+
+install: install-all
 
 # ═════════════════════════════════════════════════════════════════════════════
 # install-<arch>: packages → libraries → strip → prune → /bin → init
@@ -57,93 +59,92 @@ install-$(1): userland-$(1)
 	  $$(MAKE) install-$$$$pkg-$(1) || exit 1; \
 	done
 	$$(MAKE) install-libs-$(1)
-	$$(MAKE) strip-all-$(1) 2>/dev/null || true
-	$$(MAKE) prune-docs-$(1) 2>/dev/null || true
+	$$(MAKE) strip-all-$(1)
+	$$(MAKE) prune-$(1)
 	$$(MAKE) consolidate-bin-$(1)
 	$$(MAKE) install-init-$(1)
-	@echo "=== Install complete ($(1)) ==="
+	@echo "=== Install complete ($(1)): $$$$(du -sh "$(ROOTFS_$(1))" | cut -f1) ==="
 endef
 
 $(foreach t,$(TARGETS),$(eval $(call INSTALL_ARCH,$(t))))
 
-install-all: $(addprefix install-,$(BUILD_ARCHS))
-	@echo "=== All installs complete ==="
-
-install: install-all
-	@echo "=== All installs complete ==="
-
 # ═════════════════════════════════════════════════════════════════════════════
-# Copy shared libraries into rootfs
+# Shared libraries: the dynamic linker plus everything the binaries need
 # ═════════════════════════════════════════════════════════════════════════════
-# The dynamic linker (LDSO_<a>) and the libraries in INSTALL_LIBS_<a> come
-# from the cross sysroot, or from the host for native builds; copy-libs.sh
-# then adds everything else the binaries link against (DT_NEEDED,
-# recursively): native builds pick up host libraries such as ncurses, gmp or
-# pam.
-
-INSTALL_LIBS_x86_64 := libc.so.6 libm.so.6 libpthread.so.0 librt.so.1 \
-    libdl.so.2 libutil.so.1 libresolv.so.2 libcrypt.so.2 \
-    libnss_files.so.2 libnss_dns.so.2 \
-    libncursesw.so.6 libgmp.so.10 libmpfr.so.6
-INSTALL_LIBS_arm64  := libc.so.6 libm.so.6 libpthread.so.0 librt.so.1 \
-    libdl.so.2 libutil.so.1 libresolv.so.2
+# Taken from the cross sysroot, or from the host for native builds.
+# copy-libs.sh follows DT_NEEDED recursively; libraries already in the rootfs
+# (libcrypto from install-openssl) are kept. The NSS modules are loaded with
+# dlopen, so they are named explicitly (stubs since glibc 2.34; copied when
+# present).
 
 LIB_DIRS = $(foreach d,usr/lib usr/lib64 usr/lib/$(MULTIARCH_$(1)) lib lib64 lib/$(MULTIARCH_$(1)),$(SYSROOT_$(1))/$(d))
 
 define INSTALL_LIBS
 install-libs-$(1):
 	@echo "=== Installing shared libraries ($(1)) ==="
-	mkdir -p "$(ROOTFS_$(1))/lib" "$(ROOTFS_$(1))/lib64"
-	for d in $(call LIB_DIRS,$(1)); do \
+	mkdir -p "$(ROOTFS_$(1))/lib" "$(ROOTFS_$(1))$(dir $(LDSO_$(1)))"
+	set -e; for d in $(call LIB_DIRS,$(1)); do \
 	  [ -e "$$$$d/$(notdir $(LDSO_$(1)))" ] && { cp -L "$$$$d/$(notdir $(LDSO_$(1)))" "$(ROOTFS_$(1))$(LDSO_$(1))"; break; }; \
 	done; \
-	[ -e "$(ROOTFS_$(1))$(LDSO_$(1))" ] || { echo "ERROR: $(notdir $(LDSO_$(1))) not found"; exit 1; }
+	[ -e "$(ROOTFS_$(1))$(LDSO_$(1))" ] || { echo "ERROR: $(notdir $(LDSO_$(1))) not found in $(call LIB_DIRS,$(1))"; exit 1; }
 	# A dynamic linker in /lib is also reachable as /lib64/<name>
-	$(if $(filter /lib/,$(dir $(LDSO_$(1)))),ln -sf $(LDSO_$(1)) "$(ROOTFS_$(1))/lib64/")
-	for lib in $(INSTALL_LIBS_$(1)); do \
+	$(if $(filter /lib/,$(dir $(LDSO_$(1)))),mkdir -p "$(ROOTFS_$(1))/lib64" && ln -sf $(LDSO_$(1)) "$(ROOTFS_$(1))/lib64/")
+	for lib in libnss_files.so.2 libnss_dns.so.2; do \
 	  for d in $(call LIB_DIRS,$(1)); do \
 	    [ -e "$$$$d/$$$$lib" ] && { cp -L "$$$$d/$$$$lib" "$(ROOTFS_$(1))/lib/"; break; }; \
 	  done; \
 	done
 	$(CURDIR)/mk/copy-libs.sh "$(ROOTFS_$(1))" $(CROSS_$(1))readelf $(call LIB_DIRS,$(1))
-	# ld-linux may search /usr/lib64/, not /lib/ — symlink so it finds our libs
-	ln -sf /lib "$(ROOTFS_$(1))/usr/lib64" 2>/dev/null || true
-	@echo "=== Shared libraries installed ==="
+	# The dynamic linker may search /usr/lib64: point it at /lib
+	ln -sfn /lib "$(ROOTFS_$(1))/usr/lib64"
 endef
 
 $(foreach t,$(TARGETS),$(eval $(call INSTALL_LIBS,$(t))))
 
 # ═════════════════════════════════════════════════════════════════════════════
-# Per-target post-install
+# Strip and prune
 # ═════════════════════════════════════════════════════════════════════════════
 
+# Every ELF file (programs and libraries), with the target's strip; other
+# files (scripts) are skipped, and a strip failure fails the install. Some
+# packages install read-only programs (dhcpcd: 555), which strip cannot
+# rewrite: they are made writable for it and get their mode back.
 define STRIP_ALL
 strip-all-$(1):
 ifneq ($(STRIP),0)
 	@echo "=== Stripping $(1) binaries ==="
-	find "$(ROOTFS_$(1))"/bin "$(ROOTFS_$(1))"/sbin \
-	     "$(ROOTFS_$(1))"/usr/bin "$(ROOTFS_$(1))"/usr/sbin \
-	     -type f -exec $(CROSS_$(1))strip -s {} \; 2>/dev/null || true
-	find "$(ROOTFS_$(1))"/lib "$(ROOTFS_$(1))"/usr/lib "$(ROOTFS_$(1))"/usr/libexec \
-	     -type f -name '*.so*' -exec $(CROSS_$(1))strip --strip-unneeded {} \; 2>/dev/null || true
+	find "$(ROOTFS_$(1))" -type f \( -perm -u+x -o -name '*.so*' \) | while read -r f; do \
+	  [ "$$$$(head -c 4 "$$$$f" | od -An -c | tr -d ' ')" = '177ELF' ] || continue; \
+	  m=$$$$(stat -c %a "$$$$f"); chmod u+w "$$$$f"; \
+	  $(CROSS_$(1))strip --strip-unneeded "$$$$f" || exit 1; \
+	  chmod "$$$$m" "$$$$f"; \
+	done
 endif
 endef
 
 $(foreach t,$(TARGETS),$(eval $(call STRIP_ALL,$(t))))
 
-# Documentation, locales, desktop files, and the parts of the vim runtime
-# not needed (keep syntax/, indent/, ftplugin/, autoload/, colors/, plugin/)
-PRUNE_DOCS_PATHS := usr/share/doc usr/share/man usr/share/info usr/share/locale \
-    var/cache usr/share/applications usr/share/icons \
-    $(addprefix usr/share/vim/vim92/,doc tutor spell print macros tools pack colors/lists colors/tools import)
+# What the image does not need: documentation, locales, headers, static
+# libraries and libtool files, bash loadable builtins and completions, and
+# the vim runtime (vim is built with --with-features=tiny: no syntax, no
+# filetype plugins, no Vim script — only defaults.vim is read)
+PRUNE_PATHS := usr/share/doc usr/share/man usr/share/info usr/share/locale \
+               usr/share/applications usr/share/icons usr/share/bash-completion \
+               usr/share/aclocal usr/share/pkgconfig usr/include \
+               usr/lib/pkgconfig usr/lib/bash var/cache
 
-define PRUNE_DOCS
-prune-docs-$(1):
-	@echo "=== Pruning docs ($(1)) ==="
-	-cd "$(ROOTFS_$(1))" && rm -rf $(PRUNE_DOCS_PATHS) tmp/*
+define PRUNE
+prune-$(1):
+	@echo "=== Pruning ($(1)) ==="
+	cd "$(ROOTFS_$(1))" && rm -rf $(PRUNE_PATHS) tmp/*
+	find "$(ROOTFS_$(1))" -type f \( -name '*.a' -o -name '*.la' \) -delete
+	for d in "$(ROOTFS_$(1))"/usr/share/vim/vim*; do \
+	  [ -d "$$$$d" ] || continue; \
+	  find "$$$$d" -mindepth 1 -maxdepth 1 ! -name defaults.vim -exec rm -rf {} +; \
+	done
 endef
 
-$(foreach t,$(TARGETS),$(eval $(call PRUNE_DOCS,$(t))))
+$(foreach t,$(TARGETS),$(eval $(call PRUNE,$(t))))
 
 # ═════════════════════════════════════════════════════════════════════════════
 # Binary consolidation — move all binaries to /bin

@@ -199,8 +199,11 @@ $(XT_STAMP)/gcc1: $(XT_STAMP)/binutils $(XT_STAMP)/gcc-src
 	@touch "$@"
 
 # ── glibc for the target, built by gcc stage 1 ──────────────────────────────
-# CXX names the target's g++, which stage 1 lacks: glibc then skips its C++
-# programs instead of building them with the host's g++.
+# CXX is the target's g++ in the prefix, which stage 1 (C only) does not
+# have yet: glibc then skips its C++ programs instead of building them with
+# the host's g++. An absolute path, because some hosts have the target's name
+# already: Ubuntu calls its native g++ x86_64-linux-gnu-g++ /
+# aarch64-linux-gnu-g++, which a plain $(XT_TRIPLET)-g++ would find.
 # Libraries in /lib and /usr/lib for every target (glibc's defaults differ:
 # /usr/lib64 on aarch64, /lib64/lp64d on riscv64, while gcc without multilib
 # searches lib); the dynamic linker where gcc points binaries at it
@@ -214,7 +217,7 @@ $(XT_STAMP)/glibc: $(XT_STAMP)/gcc1 $(XT_STAMP)/linux-headers $(if $(XT_NEED_PY)
 	  --prefix=/usr --libdir=/usr/lib --with-headers="$(XT_SYSROOT)/usr/include" \
 	  libc_cv_slibdir=/lib libc_cv_rtlddir=$(XT_RTLDDIR) \
 	  --enable-kernel=5.4 --disable-werror --disable-nscd \
-	  CXX="$(XT_TRIPLET)-g++" CFLAGS="$(TC_CFLAGS)" CXXFLAGS="$(TC_CFLAGS)"
+	  CXX="$(XT_PREFIX)/bin/$(XT_TRIPLET)-g++" CFLAGS="$(TC_CFLAGS)" CXXFLAGS="$(TC_CFLAGS)"
 	$(XT_MAKE) -C "$(XT_W)/glibc-build" $(TC_JOBS)
 	$(XT_MAKE) -C "$(XT_W)/glibc-build" install \
 	  install_root="$(XT_SYSROOT)" DESTDIR="$(XT_SYSROOT)"

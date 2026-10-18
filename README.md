@@ -35,6 +35,18 @@ image runs in UTM with hardware virtualization:
 With plain QEMU on any host (including inside a Linux build VM):
 `make qemu-start qemu-console`. See [docs/qemu.md](docs/qemu.md).
 
+### Dev image
+
+A second, larger image with a toolchain built from the same pinned sources
+(gcc, binutils, glibc, make, perl, Python, Node.js) and cross compilers for
+seven targets under `/opt/cross`. Like the base image, it is built once and
+then used as it is: a build runtime for other projects, not a system that
+rebuilds itself.
+
+- [docs/self-hosting.md](docs/self-hosting.md): the native toolchain and the dev image
+- [docs/cross-toolchains.md](docs/cross-toolchains.md): the cross toolchains
+- [docs/ci-dev.md](docs/ci-dev.md): building and publishing both in GitHub CI
+
 ---
 
 ## Git Submodules
@@ -83,8 +95,21 @@ linux-libre-vm/
 │   ├── 07-kernel.mk             Linux-libre kernel (x86_64 + arm64)
 │   ├── 08-clean-help.mk         clean, distclean, help
 │   ├── 09-init.mk               init system + /etc skeleton
-│   ├── 10-disk.mk               disk image + QEMU + test targets
+│   ├── 10-disk.mk               disk image + QEMU boot targets
+│   ├── 11-test.mk               test targets
+│   ├── 12-utm.mk                UTM runner (macOS)
+│   ├── 13-qemu.mk               QEMU runner
+│   ├── 14-toolchain.mk          native toolchain + dev image
+│   ├── 15-cross-toolchain.mk    cross toolchains
+│   ├── copy-libs.sh             copy shared libraries into a rootfs
+│   ├── mkimage.sh               ext4 disk image from a rootfs (no root needed)
 │   └── tee-log.sh               LOG=1 tee wrapper
+│
+├── scripts/
+│   ├── fetch-submodules.sh      shallow, pinned submodule fetch
+│   ├── fetch-toolchain.sh       toolchain sources + pinned tarballs
+│   ├── release-manifest.sh      release manifest (versions, libraries, files)
+│   └── smoke-test.sh            boot an image, check console, DHCP, ssh (make test, CI)
 │
 ├── sources/                      git submodules (NEVER modified)
 │   └── <pkg>/                    per-package source trees
@@ -110,9 +135,10 @@ linux-libre-vm/
 ├── templates/                    init system template files (tracked in git)
 │   ├── etc/                     /etc skeleton
 │   │   ├── fstab, passwd, group, shadow, hostname, hosts, resolv.conf
-│   │   ├── ld.so.conf
-│   │   └── runit/{1,2,3,ctrlaltdel}
-│   └── bin/                     poweroff, reboot, halt, shutdown scripts
+│   │   ├── ld.so.conf, ssh/sshd_config
+│   │   ├── runit/{1,2,3,ctrlaltdel}
+│   │   └── service/             getty, dhcpcd, sshd (runit services)
+│   └── bin/                     poweroff, reboot, halt, shutdown, console-shell
 │
 └── README.md                    this file
 ```
@@ -170,9 +196,8 @@ make qemu-x86_64                   # boots to bash shell (QEMU q35 + virtio-pci)
 make qemu-arm64                    # boots to bash shell (QEMU virt + virtio-pci)
 
 # Tests
-make test-dhcpcd-x86_64            # DHCP test (10s timeout)
-make test-shutdown-x86_64          # shutdown test (6s timeout)
-make test                          # all tests
+make test                          # boot each image: console, DHCP, ssh login
+make test-x86_64                   # one arch (scripts/smoke-test.sh)
 
 # Logging
 make build LOG=1                   # → build-logs/build.log
@@ -202,9 +227,14 @@ sources/<pkg>  ──copy+patch──→  sources-patched/<pkg>/  (once)
 
 coreutils bash grep sed gawk findutils diffutils gzip tar vim iproute2 procps-ng util-linux runit dhcpcd openssl openssh
 
-The list is `USERLAND_PKGS` in `mk/00-vars.mk`. Per-arch facts (serial
-console, kernel image, dynamic linker) are one table there too; the build,
-install, kernel, init and QEMU rules are macros over it.
+The list is `USERLAND_PKGS` in `mk/00-vars.mk`. Optional features are set
+explicitly per package there (`<pkg>_CONFIGURE`): without that, configure
+enables whatever libraries the build host happens to have (OpenSSL, GMP, PAM,
+readline, PCRE2, libelf ...), and native and cross builds produce different
+images. ncurses is the exception still left to the build (native: host's,
+cross: none). Per-arch facts (serial console, kernel image, dynamic linker)
+are one table there too; the build, install, kernel, init and QEMU rules are
+macros over it.
 
 ### SSH
 
@@ -230,7 +260,7 @@ SSH_PORT=2222 make qemu-start && ssh -p 2222 root@127.0.0.1   # QEMU
 ssh root@<guest address>                                      # UTM
 ```
 
-The disk image rules make every file owned by root (`mk/chown-root.sh`):
+The disk image script makes every file owned by root (`mk/mkimage.sh`):
 `mke2fs -d` keeps the build user as owner, and sshd refuses keys under a
 `/root` it does not own.
 
@@ -277,8 +307,10 @@ Shell: bash-5.3#
 
 | Item | Status |
 |------|--------|
-| Setuid binaries | ✅ None (no shadow/sudo/PAM) |
+| Setuid binaries | ✅ None (no shadow/sudo/PAM; login, su, chfn, chsh, runuser not built) |
 | SSH | ✅ Key login only, no passwords; no keys in the image (added on the serial console) |
+| Compiler hardening | ✅ `-fstack-protector-strong -D_FORTIFY_SOURCE=2`, full RELRO |
+| File ownership | ✅ Every file in the image owned by root (`mk/mkimage.sh`) |
 | /proc mount | ✅ `nosuid,noexec,nodev` |
 | Seccomp | ✅ Built into both kernels (`CONFIG_SECCOMP_FILTER=y`) |
 | Non-free blobs | 0 ✅ |
@@ -289,10 +321,10 @@ Shell: bash-5.3#
 
 | Metric | Target | Current |
 |--------|--------|---------|
-| Kernel image | < 3 MB | x86_64: 3.3M, arm64: 2.9M |
-| Rootfs (uncompressed) | < 50 MB | x86_64: 67M, arm64: 62M |
+| Kernel image | < 3 MB | |
+| Rootfs (uncompressed) | < 50 MB | |
 | RAM at idle | < 64 MB | x86_64: ~21M, arm64: ~14M ✅ |
-| Running processes | < 15 | x86_64: 34, arm64: 36 |
+| Running processes | < 15 | |
 | Non-free blobs | 0 | 0 ✅ |
 
 ---
@@ -304,7 +336,8 @@ Shell: bash-5.3#
 - arm64 machine: QEMU virt with virtio-mmio (block) + virtio-pci (network)
 - Init: runit (statically linked) → PID 1
 - Services: getty on serial console (ttyS0 / ttyAMA0), dhcpcd, sshd
-- Rootfs: ext4 image, created via `mke2fs -d` (no loop devices, no root)
+- Rootfs: ext4 image, created via `mke2fs -d` + `debugfs` (no loop devices, no root),
+  all files owned by root, fixed timestamps/UUID (`SOURCE_DATE_EPOCH`)
 - Boot: QEMU + kernel + raw disk image, no bootloader needed
 - Networking: QEMU slirp user-mode, dhcpcd
 - Library path: `/usr/lib64 → /lib` for ld-linux compatibility

@@ -26,7 +26,7 @@ $$(BUILD_DIR_$(2))/$(1)/.built: $$(BUILD_DIR_$(2))/$(1)/.copied
 	cd "$$(BUILD_DIR_$(2))/$(1)" && \
 		"$$(SOURCES_PATCHED_DIR)/$(1)"/configure \
 			$(call HOST_FLAG,$(2)) \
-			$(USERLAND_CONFIG) \
+			$(USERLAND_CONFIG) $$($(1)_CONFIGURE) $$($(1)_CONFIGURE_$(2)) \
 			CFLAGS="$(COMMON_CFLAGS)" \
 			LDFLAGS="$(COMMON_LDFLAGS)" || exit 1
 	# Cross-compilation: stub help2man (cross binaries can't run on host)
@@ -73,7 +73,7 @@ $$(BUILD_DIR_$(2))/$(1)/.built: $$(BUILD_DIR_$(2))/$(1)/.copied | $(FAKE_BIN)/.s
 	cd "$$(BUILD_DIR_$(2))/$(1)" && ./configure \
 	    $(call HOST_FLAG,$(2)) \
 	    $(USERLAND_CONFIG) --disable-liblastlog2 \
-	    $$($(1)_CONFIGURE_$(2)) \
+	    $$($(1)_CONFIGURE) $$($(1)_CONFIGURE_$(2)) \
 	    CFLAGS="$(COMMON_CFLAGS)" LDFLAGS="$(COMMON_LDFLAGS)"
 	printf '%s\n' 'all:' 'install:' 'clean:' '.PHONY: all install clean' > "$$(BUILD_DIR_$(2))/$(1)/po/Makefile" 2>/dev/null || true
 	# Cross-compilation: stub help2man (cross binaries can't run on host)
@@ -159,6 +159,7 @@ $$(BUILD_DIR_$(2))/$(1)/.built: $$(BUILD_DIR_$(2))/$(1)/.copied | $(FAKE_BIN)/.s
 	  ./configure \
 	    $(call HOST_FLAG,$(2)) \
 	    --prefix=/usr --disable-nls --disable-silent-rules \
+	    $$($(1)_CONFIGURE) $$($(1)_CONFIGURE_$(2)) \
 	    CFLAGS="$(COMMON_CFLAGS)" LDFLAGS="$(COMMON_LDFLAGS)"
 	# Ensure po/Makefile exists (--disable-nls still recurses into po/)
 	printf '%s\n' 'all:' 'install:' 'clean:' '.PHONY: all install clean' > "$$(BUILD_DIR_$(2))/$(1)/po/Makefile" 2>/dev/null || true
@@ -265,7 +266,7 @@ $$(BUILD_DIR_$(1))/tar/.built: $$(BUILD_DIR_$(1))/tar/.copied | $(FAKE_BIN)/.sta
 	cd "$$(BUILD_DIR_$(1))/tar" && \
 	  ./configure \
 	    $$(call HOST_FLAG,$(1)) \
-	    --prefix=/usr --disable-nls --disable-silent-rules \
+	    --prefix=/usr --disable-nls --disable-silent-rules $$(tar_CONFIGURE) \
 	    CFLAGS="$$(COMMON_CFLAGS)" LDFLAGS="$$(COMMON_LDFLAGS)"
 	# Ensure po/Makefile exists (--disable-nls still recurses into po/)
 	printf '%s\n' 'all:' 'install:' 'clean:' '.PHONY: all install clean' > "$$(BUILD_DIR_$(1))/tar/po/Makefile" 2>/dev/null || true
@@ -294,14 +295,15 @@ build-iproute2-$(1): $$(BUILD_DIR_$(1))/iproute2/.built
 
 $$(BUILD_DIR_$(1))/iproute2/.built: $$(BUILD_DIR_$(1))/iproute2/.copied
 	@echo "=== Building iproute2 for $(1) ==="
-	# Cross builds: PKG_CONFIG=false, or configure picks up the build host's
-	# libraries (e.g. libelf) and the link fails for the target
+	# PKG_CONFIG=false: every optional library (libelf, libmnl, libcap,
+	# libbpf, SELinux ...) is found through pkg-config; without it the build
+	# uses none of the host's, natively and cross
 	cd "$$(BUILD_DIR_$(1))/iproute2" && \
-	  CC=$$(CROSS_$(1))gcc AR=$$(CROSS_$(1))ar $$(if $$(CROSS_$(1)),PKG_CONFIG=false) \
+	  CC=$$(CROSS_$(1))gcc AR=$$(CROSS_$(1))ar PKG_CONFIG=false \
 	  ./configure --prefix=/usr
 	PATH="$(TC_PATH_$(1)):$$(FAKE_BIN_PATH)" \
 	  CC=$$(CROSS_$(1))gcc AR=$$(CROSS_$(1))ar \
-	  CFLAGS="-O2 -pipe -fomit-frame-pointer -s" LDFLAGS="-s -Wl,--as-needed,-z,relro,-z,now" \
+	  CFLAGS="$$(COMMON_CFLAGS)" LDFLAGS="$$(COMMON_LDFLAGS)" \
 	  $$(MAKE) $$(PARALLEL) -C "$$(BUILD_DIR_$(1))/iproute2"
 	@touch "$$@"
 	@echo "=== iproute2 built ($(1)) ==="
@@ -323,7 +325,8 @@ $$(BUILD_DIR_$(1))/dhcpcd/.built: $$(BUILD_DIR_$(1))/dhcpcd/.copied
 	  CC=$$(CROSS_$(1))gcc AR=$$(CROSS_$(1))ar \
 	  CFLAGS="$$(COMMON_CFLAGS)" LDFLAGS="$$(COMMON_LDFLAGS)" \
 	  ./configure --prefix=/usr --sysconfdir=/etc --datadir=/usr/share \
-	    --libexecdir=/usr/libexec --dbdir=/var/db/dhcpcd --rundir=/var/run/dhcpcd
+	    --libexecdir=/usr/libexec --dbdir=/var/db/dhcpcd --rundir=/var/run/dhcpcd \
+	    --without-openssl
 	PATH="$(TC_PATH_$(1)):$$(FAKE_BIN_PATH)" \
 	  CC=$$(CROSS_$(1))gcc AR=$$(CROSS_$(1))ar \
 	  $$(MAKE) $$(PARALLEL) -C "$$(BUILD_DIR_$(1))/dhcpcd"

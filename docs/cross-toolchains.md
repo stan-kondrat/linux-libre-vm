@@ -149,8 +149,10 @@ Problems found and fixed on the way:
 - the kernel's `headers_install` calls `rsync` (not in the dev image):
   replaced by `make headers` plus a tar copy, also for the native toolchain;
 - glibc's configure picked up the host `g++` for its C++ test programs while
-  gcc stage 1 has no C++: `CXX=<triplet>-g++`, which does not exist yet, so
-  glibc skips them;
+  gcc stage 1 has no C++: `CXX=<prefix>/bin/<triplet>-g++`, which does not
+  exist yet, so glibc skips them. The path is absolute because Ubuntu names
+  its native g++ `x86_64-linux-gnu-g++` / `aarch64-linux-gnu-g++`, which a
+  plain `<triplet>-g++` would find on a host of the same architecture;
 - `aarch64-linux-gnu` on an arm64 host canonicalised to the build triplet, so
   gcc configured itself as a native compiler: the build machine is now named
   `<arch>-build-linux-gnu`;

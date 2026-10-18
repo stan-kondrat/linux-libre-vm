@@ -24,7 +24,7 @@ the **host's own architecture only** (arm64 inside `void-dev`).
 | perl | 5.44.0 | git `sources/toolchain/perl` | kernel build scripts |
 | zlib | 1.3.2 | tarball, SHA-256 pinned | Python's `zlib` module; `libz` for general use |
 | bzip2 | 1.0.8 | tarball, SHA-256 pinned | Python's `bz2` module (Node's configure needs it); `bzip2` command |
-| Python | 3.14.8 | git `sources/toolchain/python` | glibc's build, Node's build, general use |
+| Python | 3.14.8 | git `sources/toolchain/python` | general use; Node's build when the build host has no python3 |
 | Node.js | 26.10.0 | git `sources/toolchain/node` (V8, ICU, OpenSSL, zlib, npm bundled) | general use |
 
 Python links zlib and bzip2 statically (its modules work on a build host
@@ -155,11 +155,14 @@ The image changes (console shell, perl) apply after rebuilding the toolchain's
 perl and the dev image: in `void-dev`, `rm /var/tmp/toolchain/stamps/perl`
 then `make toolchain install-dev disk-image-dev TOOLCHAIN_WORK=/var/tmp/toolchain`.
 
-## Next
+## See also
 
-- Build the userland packages inside the VM the same way (stage 1).
-- Rebuild the toolchain with itself (stage 2) — then the host toolchain is no
-  longer involved.
+The dev image is a build-once artifact, like the base image: built from
+pinned sources, published, then used as it is; the userland and the
+toolchain are not rebuilt inside the VM.
+
+- CI builds both hosts' dev images and the cross toolchains, every build
+  stage cached, and publishes them as release assets: [ci-dev.md](ci-dev.md).
 - Cross toolchains for other targets: [cross-toolchains.md](cross-toolchains.md).
 - The declarative package/build description is a separate project,
   [eclogite-linux](https://github.com/stan-kondrat/eclogite-linux). It does not
