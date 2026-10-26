@@ -69,7 +69,7 @@ BUILD_DIR_arm64         := $(CURDIR)/sources-build/arm64
 # ── Packages ───────────────────────────────────────────────────────────────
 # Userland packages, each a submodule sources/<pkg> with build rules in
 # mk/04-build-rules.mk, declared per target in mk/05-packages.mk
-USERLAND_PKGS := coreutils bash grep sed gawk findutils diffutils gzip tar vim \
+USERLAND_PKGS := ncurses coreutils bash grep sed gawk findutils diffutils gzip tar vim \
                  iproute2 procps-ng util-linux runit dhcpcd openssl openssh
 
 # ── Per-arch facts ─────────────────────────────────────────────────────────
@@ -151,8 +151,9 @@ USERLAND_CONFIG := \
 #
 # Optional features are switched off here explicitly. Left to configure, they
 # depend on what the build host has installed (OpenSSL, GMP, PAM, readline,
-# PCRE2, libelf ...): a native build picked them up and a cross build did not,
-# so the two images differed, and the host's libraries were copied in.
+# PCRE2, libelf, libcrypt, zlib ...): a native build picked them up and a
+# cross build did not, so the two images differed, and the host's libraries
+# were copied in.
 coreutils_CONFIGURE := --with-openssl=no --without-libgmp --disable-acl --disable-xattr \
     --disable-libcap --disable-libsmack --without-selinux
 grep_CONFIGURE      := --disable-perl-regexp
@@ -170,11 +171,26 @@ util-linux_CONFIGURE := --disable-makeinstall-chown --disable-makeinstall-setuid
     --without-audit --without-smack --without-btrfs --without-user \
     --disable-login --disable-su --disable-chfn-chsh --disable-runuser \
     --disable-sulogin --disable-newgrp --disable-pam-lastlog2 \
-    --disable-bash-completion --disable-static
-# ncurses is the one feature still left to the build: cross builds go without
-# (configure would find the build host's via pkg-config and fail to link
-# -ltinfo), native builds use the host's. Building the userland with the
-# project's own toolchains (docs/cross-toolchains.md) would remove this.
-NO_NCURSES = $(if $(CROSS_$(1)),--without-ncursesw --without-ncurses --without-tinfo)
-$(foreach a,$(TARGETS),$(eval procps-ng_CONFIGURE_$(a) := $(call NO_NCURSES,$(a))))
-$(foreach a,$(TARGETS),$(eval util-linux_CONFIGURE_$(a) := $(call NO_NCURSES,$(a))))
+    --disable-bash-completion --disable-cramfs --disable-static
+
+# ncurses: bash, vim, procps-ng and util-linux use the staged pinned ncurses
+# (mk/04-build-rules.mk), never the build host's, natively and cross.
+#   NCURSES_ENV_<a>      configure arguments: its headers, and pkg-config
+#                        restricted to its ncursesw.pc (paths under the stage)
+#   NCURSES_LDFLAGS_<a>  -L to its library, added to LDFLAGS
+#   <pkg>_LDFLAGS_<a>    per-package extra LDFLAGS (build macros)
+# bash: bash_cv_termcap_lib, or its configure takes the host's -ltinfo first.
+NCURSES_USERS := bash vim procps-ng util-linux
+$(foreach a,$(TARGETS),$(eval NCURSES_STAGE_$(a) := $(BUILD_DIR_$(a))/ncurses-stage))
+$(foreach a,$(TARGETS),$(eval NCURSES_ENV_$(a) := CPPFLAGS=-I$(NCURSES_STAGE_$(a))/usr/include \
+    PKG_CONFIG_LIBDIR=$(NCURSES_STAGE_$(a))/usr/lib/pkgconfig PKG_CONFIG_SYSROOT_DIR=$(NCURSES_STAGE_$(a))))
+$(foreach a,$(TARGETS),$(eval NCURSES_LDFLAGS_$(a) := -L$(NCURSES_STAGE_$(a))/usr/lib))
+bash_CONFIGURE := bash_cv_termcap_lib=libncursesw
+$(foreach a,$(TARGETS),$(foreach p,bash procps-ng util-linux,\
+    $(eval $(p)_CONFIGURE_$(a) := $(NCURSES_ENV_$(a)))\
+    $(eval $(p)_LDFLAGS_$(a) := $(NCURSES_LDFLAGS_$(a)))))
+# util-linux looks for ncurses*-config scripts on PATH before pkg-config (the
+# build host's, pointing at its -lncursesw -ltinfo): disabled. Its tinfo
+# check finds tinfow.pc in the stage (mk/04-build-rules.mk).
+$(foreach a,$(TARGETS),$(eval util-linux_CONFIGURE_$(a) += \
+    NCURSESW6_CONFIG=false NCURSESW5_CONFIG=false NCURSES6_CONFIG=false NCURSES5_CONFIG=false))

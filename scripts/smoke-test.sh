@@ -41,8 +41,12 @@ cleanup() { vm/qemu.sh stop >/dev/null 2>&1 || true; rm -rf "$tmp"; }
 trap cleanup EXIT
 
 fail=0
+# Console output carries terminal escape sequences (bash's line editor:
+# bracketed paste, ESC[?2004h ... ESC[?2004l around each prompt): checks
+# look at the text without them
+esc=$(printf '\033')
 check() {  # check <pattern> <what>
-	if grep -q -- "$1" "$log"; then echo "ok    $2"; else echo "FAIL  $2"; fail=1; fi
+	if sed "s/$esc\[[0-9;?]*[A-Za-z]//g" "$log" | grep -q -- "$1"; then echo "ok    $2"; else echo "FAIL  $2"; fail=1; fi
 }
 
 vm/qemu.sh start

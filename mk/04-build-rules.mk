@@ -28,7 +28,7 @@ $$(BUILD_DIR_$(2))/$(1)/.built: $$(BUILD_DIR_$(2))/$(1)/.copied
 			$(call HOST_FLAG,$(2)) \
 			$(USERLAND_CONFIG) $$($(1)_CONFIGURE) $$($(1)_CONFIGURE_$(2)) \
 			CFLAGS="$(COMMON_CFLAGS)" \
-			LDFLAGS="$(COMMON_LDFLAGS)" || exit 1
+			LDFLAGS="$(COMMON_LDFLAGS) $$($(1)_LDFLAGS_$(2))" || exit 1
 	# Cross-compilation: stub help2man (cross binaries can't run on host)
 	if [ -n "$(CROSS_$(2))" ] && [ -f "$$(BUILD_DIR_$(2))/$(1)/man/help2man" ]; then \
 	  printf '#!/bin/sh\nfor f; do :; done\n' > "$$(BUILD_DIR_$(2))/$(1)/man/help2man"; \
@@ -74,7 +74,7 @@ $$(BUILD_DIR_$(2))/$(1)/.built: $$(BUILD_DIR_$(2))/$(1)/.copied | $(FAKE_BIN)/.s
 	    $(call HOST_FLAG,$(2)) \
 	    $(USERLAND_CONFIG) --disable-liblastlog2 \
 	    $$($(1)_CONFIGURE) $$($(1)_CONFIGURE_$(2)) \
-	    CFLAGS="$(COMMON_CFLAGS)" LDFLAGS="$(COMMON_LDFLAGS)"
+	    CFLAGS="$(COMMON_CFLAGS)" LDFLAGS="$(COMMON_LDFLAGS) $$($(1)_LDFLAGS_$(2))"
 	printf '%s\n' 'all:' 'install:' 'clean:' '.PHONY: all install clean' > "$$(BUILD_DIR_$(2))/$(1)/po/Makefile" 2>/dev/null || true
 	# Cross-compilation: stub help2man (cross binaries can't run on host)
 	if [ -n "$(CROSS_$(2))" ] && [ -f "$$(BUILD_DIR_$(2))/$(1)/man/help2man" ]; then \
@@ -346,14 +346,11 @@ build-vim-$(1): $$(BUILD_DIR_$(1))/vim/.built
 
 $$(BUILD_DIR_$(1))/vim/.built: $$(BUILD_DIR_$(1))/vim/.copied
 	@echo "=== Building vim for $(1) ==="
-	# For cross-compilation: create termcap stub if ncurses is unavailable
-	if [ -n "$(CROSS_$(1))" ]; then \
-	  mkdir -p "$$(BUILD_DIR_$(1))/vim/src/termcap-stub"; \
-	  cp "$(SOURCES_PATCHES_DIR)/vim/termcap-stub.c" "$$(BUILD_DIR_$(1))/vim/src/termcap-stub/"; \
-	  cd "$$(BUILD_DIR_$(1))/vim/src/termcap-stub" && \
-	    $(CROSS_$(1))gcc -c termcap-stub.c -o termcap-stub.o && \
-	    $(CROSS_$(1))ar cr libtermcap.a termcap-stub.o; \
-	fi
+	# Terminal library: the staged ncurses (NCURSES_* in 00-vars.mk).
+	# vim's configure keeps a cache (src/auto/config.cache) and refuses to run
+	# when CPPFLAGS/LDFLAGS differ from the last run: start without it, so a
+	# rebuild in an existing build directory works after a flag change
+	rm -f "$$(BUILD_DIR_$(1))/vim/src/auto/config.cache"
 	cd "$$(BUILD_DIR_$(1))/vim/src" && ./configure \
 		--prefix=/usr --with-features=tiny --disable-gui \
 		--without-x --disable-netbeans --disable-channel \
@@ -363,14 +360,14 @@ $$(BUILD_DIR_$(1))/vim/.built: $$(BUILD_DIR_$(1))/vim/.copied
 		--enable-gui=no --without-luajit \
 		--with-compiledby="linux-vm" \
 		--host=$$(TRIPLET_$(1)) \
-		$$(if $(CROSS_$(1)),--with-tlib=termcap,--with-tlib=ncurses) \
+		--with-tlib=ncursesw $$(NCURSES_ENV_$(1)) \
 		vim_cv_toupper_broken=no \
 		vim_cv_terminfo=yes \
 		vim_cv_tty_group=world \
 		ac_cv_sizeof_int=4 \
 		vim_cv_tgetent=zero \
 		vim_cv_terminfo=yes \
-		CFLAGS="$$(COMMON_CFLAGS)" LDFLAGS="$$(COMMON_LDFLAGS) $$(if $(CROSS_$(1)),-Ltermcap-stub)"
+		CFLAGS="$$(COMMON_CFLAGS)" LDFLAGS="$$(COMMON_LDFLAGS) $$(NCURSES_LDFLAGS_$(1))"
 	PATH="$(TC_PATH_$(1)):$$(FAKE_BIN_PATH)" \
 	  CC=$$(CROSS_$(1))gcc AR=$$(CROSS_$(1))ar \
 	  $$(MAKE) $$(PARALLEL) -C "$$(BUILD_DIR_$(1))/vim/src"
@@ -444,7 +441,9 @@ endef
 
 # ── OpenSSH (ssh, sshd, scp, sftp, ssh-keygen ...) ────────────────────────
 # Against the staged OpenSSL; no PAM, zlib, Kerberos, FIDO, PKCS#11 or
-# login records. Host keys are not generated here: the sshd service creates
+# login records. No libcrypt either (the build host's): crypt() serves only
+# password logins, which sshd_config disables; with ac_cv_*crypt=no OpenSSH
+# falls back to OpenSSL's DES_crypt for the remaining code path. Host keys are not generated here: the sshd service creates
 # them on first boot (every VM gets its own). Installed programs that a VM
 # does not need are removed in install-openssh.
 OPENSSH_CONFIGURE := --prefix=/usr --sysconfdir=/etc/ssh --libexecdir=/usr/libexec \
@@ -454,7 +453,8 @@ OPENSSH_CONFIGURE := --prefix=/usr --sysconfdir=/etc/ssh --libexecdir=/usr/libex
     --without-pam --without-zlib --without-selinux --without-kerberos5 \
     --without-libedit --without-audit --without-security-key-builtin --without-rpath \
     --disable-security-key --disable-pkcs11 --disable-strip \
-    --disable-lastlog --disable-utmp --disable-utmpx --disable-wtmp --disable-wtmpx
+    --disable-lastlog --disable-utmp --disable-utmpx --disable-wtmp --disable-wtmpx \
+    ac_cv_lib_crypt_crypt=no ac_cv_func_crypt=no
 
 define OPENSSH_BUILD_RULES
 $$(eval $$(call COPY_PKG,openssh,$(1)))
@@ -481,4 +481,57 @@ install-openssh-$(1): build-openssh-$(1) install-openssl-$(1)
 	  usr/libexec/ssh-pkcs11-helper usr/libexec/ssh-sk-helper
 	mkdir -p "$$(ROOTFS_$(1))/var/empty"
 	chmod 755 "$$(ROOTFS_$(1))/var/empty"
+endef
+
+# ── ncurses (libncursesw for bash, vim, procps-ng, util-linux) ────────────
+# Built from the pinned source so that no package links the build host's
+# ncurses/tinfo, native and cross alike. Only libncursesw.so.6 goes into
+# the rootfs; headers, libraries and ncursesw.pc are staged in
+# ncurses-stage/ for the packages that use it (NCURSES_* in 00-vars.mk).
+# Terminal descriptions for the usual terminals are compiled into the
+# library (fallbacks); a terminfo directory is still read if present.
+# The fallbacks are C code generated by tic + infocmp for this version's
+# structures, so those two are first built for the build machine from the
+# same source (build-host/), not taken from the host.
+NCURSES_FALLBACKS := vt100,vt102,vt220,linux,ansi,dumb,xterm,xterm-256color,screen,screen-256color,tmux,tmux-256color,alacritty
+NCURSES_COMMON    := --without-debug --without-ada --without-cxx --without-cxx-binding \
+    --without-manpages --without-tests --disable-db-install
+NCURSES_CONFIGURE := --prefix=/usr --libdir=/usr/lib --with-shared --without-normal \
+    $(NCURSES_COMMON) --without-progs --enable-overwrite --disable-stripping \
+    --enable-pc-files --with-pkg-config-libdir=/usr/lib/pkgconfig \
+    --with-terminfo-dirs=/etc/terminfo:/usr/share/terminfo \
+    --with-fallbacks=$(NCURSES_FALLBACKS)
+
+define NCURSES_BUILD_RULES
+$$(eval $$(call COPY_PKG,ncurses,$(1)))
+
+build-ncurses-$(1): $$(BUILD_DIR_$(1))/ncurses/.built
+
+$$(BUILD_DIR_$(1))/ncurses/.built: $$(BUILD_DIR_$(1))/ncurses/.copied
+	@echo "=== Building ncurses for $(1) ==="
+	rm -rf "$$(BUILD_DIR_$(1))/ncurses/build-host" "$$(BUILD_DIR_$(1))/ncurses/build-target" "$$(NCURSES_STAGE_$(1))"
+	mkdir -p "$$(BUILD_DIR_$(1))/ncurses/build-host" "$$(BUILD_DIR_$(1))/ncurses/build-target"
+	cd "$$(BUILD_DIR_$(1))/ncurses/build-host" && ../configure --without-shared --with-normal $$(NCURSES_COMMON) CC=gcc
+	$$(MAKE) $$(PARALLEL) -C "$$(BUILD_DIR_$(1))/ncurses/build-host/include"
+	$$(MAKE) $$(PARALLEL) -C "$$(BUILD_DIR_$(1))/ncurses/build-host/ncurses"
+	$$(MAKE) $$(PARALLEL) -C "$$(BUILD_DIR_$(1))/ncurses/build-host/progs" tic infocmp
+	cd "$$(BUILD_DIR_$(1))/ncurses/build-target" && ../configure $$(call HOST_FLAG,$(1)) $$(NCURSES_CONFIGURE) \
+	  --with-build-cc=gcc --with-tic-path="$$(BUILD_DIR_$(1))/ncurses/build-host/progs/tic" \
+	  --with-infocmp-path="$$(BUILD_DIR_$(1))/ncurses/build-host/progs/infocmp" \
+	  CFLAGS="$$(COMMON_CFLAGS)" LDFLAGS="$$(COMMON_LDFLAGS)"
+	$$(MAKE) $$(PARALLEL) -C "$$(BUILD_DIR_$(1))/ncurses/build-target"
+	$$(MAKE) -C "$$(BUILD_DIR_$(1))/ncurses/build-target" install.libs install.includes DESTDIR="$$(NCURSES_STAGE_$(1))"
+	# tinfow.pc: the terminfo functions are in libncursesw (no separate
+	# libtinfow). util-linux requires this description (its static-build
+	# check runs even with --disable-static) and otherwise falls back to
+	# the build host's -ltinfo
+	printf '%s\n' 'prefix=/usr' 'libdir=$$$${prefix}/lib' 'includedir=$$$${prefix}/include' '' \
+	  'Name: tinfow' 'Description: terminfo functions (in libncursesw)' 'Version: 6.6' \
+	  'Libs: -L$$$${libdir} -lncursesw' 'Cflags: -I$$$${includedir}' \
+	  > "$$(NCURSES_STAGE_$(1))/usr/lib/pkgconfig/tinfow.pc"
+	@touch "$$@"
+
+install-ncurses-$(1): build-ncurses-$(1)
+	mkdir -p "$$(ROOTFS_$(1))/usr/lib"
+	cp -a "$$(NCURSES_STAGE_$(1))"/usr/lib/libncursesw.so.6* "$$(ROOTFS_$(1))/usr/lib/"
 endef

@@ -73,6 +73,7 @@ All third-party sources are managed as git submodules under `sources/` — **nev
 | util-linux | `https://git.kernel.org/pub/scm/utils/util-linux/util-linux.git` | `v2.40.4` | system utilities |
 | runit | `https://github.com/g-pape/runit/` | `v2.3.1` | init system |
 | dhcpcd | `https://github.com/NetworkConfiguration/dhcpcd.git` | `v10.3.2` | DHCP client |
+| ncurses | `https://github.com/ThomasDickey/ncurses-snapshots.git` | `v6_6` | terminal library (bash, vim, procps-ng, util-linux) |
 | openssl | `https://github.com/openssl/openssl.git` | `openssl-3.6.5` | libcrypto for OpenSSH |
 | openssh | `https://github.com/openssh/openssh-portable.git` | `V_10_6_P1` | ssh server + client |
 
@@ -223,16 +224,18 @@ sources/<pkg>  ──copy+patch──→  sources-patched/<pkg>/  (once)
 - **On x86_64 host:** x86_64 = native `gcc`, arm64 = `aarch64-linux-gnu-` cross
 - **On aarch64 host:** arm64 = native `gcc`, x86_64 = `x86_64-linux-gnu-` cross
 
-### Packages (17 userland + 1 kernel)
+### Packages (18 userland + 1 kernel)
 
-coreutils bash grep sed gawk findutils diffutils gzip tar vim iproute2 procps-ng util-linux runit dhcpcd openssl openssh
+ncurses coreutils bash grep sed gawk findutils diffutils gzip tar vim iproute2 procps-ng util-linux runit dhcpcd openssl openssh
 
 The list is `USERLAND_PKGS` in `mk/00-vars.mk`. Optional features are set
 explicitly per package there (`<pkg>_CONFIGURE`): without that, configure
 enables whatever libraries the build host happens to have (OpenSSL, GMP, PAM,
-readline, PCRE2, libelf ...), and native and cross builds produce different
-images. ncurses is the exception still left to the build (native: host's,
-cross: none). Per-arch facts (serial console, kernel image, dynamic linker)
+readline, PCRE2, libelf, libcrypt, zlib ...), and native and cross builds
+produce different images. The libraries the image does need come from pinned
+sources: OpenSSL's libcrypto and ncurses (libncursesw, with built-in
+descriptions for the usual terminals; `/usr/share/terminfo` is read when
+present). From the build host only glibc remains. Per-arch facts (serial console, kernel image, dynamic linker)
 are one table there too; the build, install, kernel, init and QEMU rules are
 macros over it.
 
@@ -279,29 +282,12 @@ Patches live in `sources-patches/<pkg>/` and apply once during copy to `sources-
 
 ## Verification
 
-### x86_64 Boot Diagnostics
-
-```
-Hostname: linux-libre
-Kernel: 7.1.3-gnu-linux-libre
-Memory: 245MB total, ~21MB used
-Processes: 34
-Binaries: 297 in /bin
-Loopback: 127.0.0.1/8
-DHCP: 10.0.2.15/24 on eth0
-Shell: bash-5.3#
-```
-
-### arm64 Boot Diagnostics
-
-```
-Hostname: linux-libre
-Kernel: 7.1.3-gnu-linux-libre
-Memory: 249MB total, ~14MB used
-Processes: 36
-Binaries: 287 in /bin
-Shell: bash-5.3#
-```
+`make test` and CI boot each image under QEMU and check it with
+`scripts/smoke-test.sh`: Linux-libre kernel, writable root filesystem, DHCP
+address, and an ssh login as root with a key added on the serial console
+(`make test-dev` also checks the dev image's compilers, Python and Node.js).
+`make qemu-<arch> BOOT_DIAG=1` prints boot diagnostics (memory, processes,
+network) from runit stage 1.
 
 ### Hardening
 
@@ -321,10 +307,10 @@ Shell: bash-5.3#
 
 | Metric | Target | Current |
 |--------|--------|---------|
-| Kernel image | < 3 MB | |
-| Rootfs (uncompressed) | < 50 MB | |
+| Kernel image | < 3 MB | x86_64: 2.6M, arm64: 2.9M ✅ |
+| Rootfs (uncompressed) | < 50 MB | x86_64: 46M ✅, arm64: 52M |
 | RAM at idle | < 64 MB | x86_64: ~21M, arm64: ~14M ✅ |
-| Running processes | < 15 | |
+| User-space processes | ≤ 15 | 15 ✅ (runit, runsvdir, 3 runsv, 2 svlogd, 5 dhcpcd with privilege separation, console bash, sshd) |
 | Non-free blobs | 0 | 0 ✅ |
 
 ---

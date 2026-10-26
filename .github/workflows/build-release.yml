@@ -98,15 +98,14 @@ jobs:
 
       # ── Cache: sources-patched/ ────────────────────────────────────────────
       # Patched source trees (shared across arches). Keyed on submodule SHAs
-      # + patch files + mk rules that control patching.
+      # + patch files + mk rules that control patching. Exact key only: an
+      # older tree restored by prefix would keep its .patched stamps after a
+      # submodule bump, and make would not copy the new sources.
       - name: Cache sources-patched
         uses: actions/cache@v4
         with:
           path: sources-patched
           key: sources-patched-${{ steps.cache-keys.outputs.submodule-hash }}-${{ hashFiles('sources-patches/**', 'mk/03-source-prep.mk') }}
-          restore-keys: |
-            sources-patched-${{ steps.cache-keys.outputs.submodule-hash }}-
-            sources-patched-
 
       # ── Cache: ccache ─────────────────────────────────────────────────────
       # Compiler object cache (per-arch). Survives minor config changes via
@@ -122,15 +121,15 @@ jobs:
       # ── Cache: build output ────────────────────────────────────────────────
       # Full per-arch build directories with `.built` stamp files. When the
       # cache hits, `make` finds all stamp files and skips everything.
-      # Keyed on submodule SHAs + config so it auto-invalidates.
+      # Keyed on submodule SHAs + config. Exact key only: the stamps do not
+      # depend on mk/*.mk, so an older build restored by prefix would keep
+      # packages built with old configure flags; after a change everything is
+      # rebuilt (ccache makes that faster).
       - name: Cache build output (${{ matrix.arch }})
         uses: actions/cache@v4
         with:
           path: sources-build/${{ matrix.arch }}
           key: build-native-${{ matrix.arch }}-${{ steps.cache-keys.outputs.submodule-hash }}-${{ steps.cache-keys.outputs.config-hash }}
-          restore-keys: |
-            build-native-${{ matrix.arch }}-${{ steps.cache-keys.outputs.submodule-hash }}-
-            build-native-${{ matrix.arch }}-
 
       - uses: ./.github/actions/setup-host
         with:

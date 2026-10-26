@@ -21,7 +21,9 @@ used as they are. Nothing is rebuilt inside a VM.
 - It runs rarely (build once), so it does not belong in `build-release.yml`,
   which runs on every push.
 
-Triggers: `workflow_dispatch`, and tags `dev-*` (which also publish a release).
+Triggers: `workflow_dispatch`, and the release tags of `build-release.yml`
+(`v*`, `release-*`): pushing one tag gives one release with both the base and
+the dev files (below).
 
 ## Jobs (per host: x86_64, arm64)
 
@@ -33,8 +35,8 @@ Triggers: `workflow_dispatch`, and tags `dev-*` (which also publish a release).
 | `assemble` | `install-dev`, `disk-image-dev`, smoke test | all of the above | ~20 min |
 
 A small `keys` job computes the cache keys first. `base`, `toolchain` and
-the 14 `cross` jobs all run in parallel; then, on a `dev-*` tag, `release`
-publishes both hosts' files.
+the 14 `cross` jobs all run in parallel; then, on a release tag, `release`
+adds both hosts' dev files to that tag's release.
 
 Host tools are fine for building: the toolchain's programs are built with the
 runner's gcc. What goes into the image comes from the pinned sources.
@@ -81,9 +83,10 @@ room on its disk.
   partial saves until they are evicted), cross ~0.8 GB; with `base` about
   3–4 GB for both hosts, next to the caches of `build-release.yml`.
 - A run can restore caches of its own ref and of the default branch. Run
-  the workflow on `main` first (`workflow_dispatch`), then push the `dev-*`
-  tag: the tag run finds every stage cached and only assembles and
-  publishes.
+  the workflow on `main` first (`workflow_dispatch`), then push the release
+  tag: the tag run finds every stage cached and only assembles and uploads.
+  Without that, the tag run builds everything (several hours) before the
+  dev files appear on the release.
 - Caches are a speedup only. The release assets are what is kept.
 
 ## Smoke test
@@ -93,13 +96,19 @@ same script as `make test-dev` and the base workflow's boot test): serial
 console, DHCP and ssh login with a throwaway key, then over ssh compiling and
 running a C and a C++ program, one cross compiler per target (`<triplet>-gcc
 -c`), `make`, `python3 -c 'import zlib, bz2'` and `node -e`. The run fails,
-and no release is made, if any check fails. QEMU uses KVM when the runner
+and no dev files are added to the release, if any check fails. QEMU uses KVM when the runner
 offers it, TCG otherwise (slow but enough for these commands).
 
 Shared steps (disk cleanup, packages, QEMU with KVM) are the composite action
 `.github/actions/setup-host`, used by both workflows.
 
-## Release assets (`dev-*` tag)
+## Release assets (release tag)
+
+A tag starts both workflows. `build-release.yml` creates the release with the
+base images and its notes; this workflow's `release` job waits for that
+release (up to 3 hours), uploads the dev files to it and adds a "Dev images"
+section to the notes. The base files are usually there long before the dev
+files.
 
 | File | Content |
 |------|---------|
@@ -108,7 +117,7 @@ Shared steps (disk cleanup, packages, QEMU with KVM) are the composite action
 | `cross-<triplet>.<host arch>.tar.gz` | each cross toolchain on its own (14 files) |
 | `MANIFEST-dev-<arch>.txt` | source commits, runner image, cross `BUILD-INFO`, sizes |
 | `linux-libre-vm-dev-src-<tag>.tar.xz` | corresponding source: toolchain submodules, pinned tarballs, linux-libre, build files |
-| `SHA256SUMS` | |
+| `SHA256SUMS-dev` | checksums of the dev files (`SHA256SUMS` is the base files') |
 
-Dev releases are marked as pre-releases, so `vm/release.sh` ("latest
-release") keeps finding the base image.
+The dev files have names of their own (`-dev-`, `cross-`), so `vm/release.sh`
+still finds the base image in the same release.

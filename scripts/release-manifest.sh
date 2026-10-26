@@ -41,18 +41,29 @@ if command -v dpkg >/dev/null; then
 	x86_64-aarch64) want='-amd64-cross' ;;
 	*) want= ;;
 	esac
-	for f in $(cd "$ROOT" && find lib lib64 usr/lib -maxdepth 1 -name '*.so*' 2>/dev/null | sort); do
+	# A library counts as the host's only if it is the host's file: same ELF
+	# build ID (strip keeps it). Libraries built here (libcrypto from
+	# sources/openssl, libblkid ... from sources/util-linux) share names with
+	# distribution packages but are not theirs.
+	build_id() { readelf -n "$1" 2>/dev/null | sed -n 's/.*Build ID: *//p' | head -1; }
+	for f in $(cd "$ROOT" && find lib lib64 usr/lib -maxdepth 1 -type f -name '*.so*' 2>/dev/null | sort); do
 		b=$(basename "$f")
+		id=$(build_id "$ROOT/$f")
 		# "*/name": a pattern starting with "/" would be an exact path for dpkg
-		pkgs=$(dpkg -S "*/$b" 2>/dev/null | sed 's/: .*//; s/, /\n/g' | sed 's/:.*//' | sort -u)
-		if [ -n "$want" ]; then
-			pkg=$(printf '%s\n' "$pkgs" | grep -e "$want" | head -1)
-		else
-			pkg=$(printf '%s\n' "$pkgs" | grep -v -e '-cross$' | head -1)
-		fi
-		if [ -n "$pkg" ]; then
-			printf '%-28s %s %s\n' "$b" "$pkg" "$(dpkg-query -W -f='${Version}' "$pkg" 2>/dev/null)"
-		fi
+		dpkg -S "*/$b" 2>/dev/null | sed 's/, /\n/g' | while IFS= read -r line; do
+			pkg=${line%%: *} path=${line#*: }
+			pkg=${pkg%%:*}
+			if [ -n "$want" ]; then
+				case $pkg in *"$want") ;; *) continue ;; esac
+			else
+				case $pkg in *-cross) continue ;; esac
+			fi
+			[ -f "$path" ] || continue
+			if [ -n "$id" ] && [ "$(build_id "$path")" = "$id" ] || cmp -s "$path" "$ROOT/$f"; then
+				printf '%-28s %s %s\n' "$b" "$pkg" "$(dpkg-query -W -f='${Version}' "$pkg" 2>/dev/null)"
+				break
+			fi
+		done
 	done
 fi
 

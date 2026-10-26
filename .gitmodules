@@ -43,6 +43,10 @@
 [submodule "sources/dhcpcd"]
 	path = sources/dhcpcd
 	url = https://github.com/NetworkConfiguration/dhcpcd.git
+[submodule "sources/ncurses"]
+	path = sources/ncurses
+	url = https://github.com/ThomasDickey/ncurses-snapshots.git
+	ref = refs/tags/v6_6
 [submodule "sources/openssl"]
 	path = sources/openssl
 	url = https://github.com/openssl/openssl.git

@@ -25,6 +25,11 @@ $(foreach t,$(TARGETS),$(eval $(call VIM_BUILD_RULES,$(t))))
 $(foreach t,$(TARGETS),$(eval $(call RUNIT_BUILD_RULES,$(t))))
 $(foreach t,$(TARGETS),$(eval $(call OPENSSL_BUILD_RULES,$(t))))
 $(foreach t,$(TARGETS),$(eval $(call OPENSSH_BUILD_RULES,$(t))))
+$(foreach t,$(TARGETS),$(eval $(call NCURSES_BUILD_RULES,$(t))))
+
+# Packages that link ncurses are built after it (NCURSES_USERS: 00-vars.mk)
+$(foreach a,$(TARGETS),$(foreach p,$(NCURSES_USERS),\
+  $(eval $(BUILD_DIR_$(a))/$(p)/.built: $(BUILD_DIR_$(a))/ncurses/.built)))
 
 # ── Aliases: <pkg> builds it for all targets ───────────────────────────────
 

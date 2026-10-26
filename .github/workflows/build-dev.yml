@@ -16,8 +16,10 @@
 #
 # `assemble` restores every cache (no stage output is passed as an artifact),
 # builds the dev image and checks it (scripts/smoke-test.sh PROFILE=dev).
-# A `dev-*` tag also publishes a release. Caches of `main` are visible to tag
-# runs: run the workflow on main first, then push the tag.
+# A release tag (v*, release-*) also adds the dev files to that tag's release,
+# the one build-release.yml creates with the base images. Caches of `main`
+# are visible to tag runs: run the workflow on main first (workflow_dispatch),
+# then push the tag, and the tag run only assembles and uploads.
 # ═══════════════════════════════════════════════════════════════════════════════
 
 name: Build dev image
@@ -25,7 +27,7 @@ name: Build dev image
 on:
   workflow_dispatch:
   push:
-    tags: ["dev-*"]
+    tags: ["v*", "release-*"]
 
 concurrency:
   group: ${{ github.ref }}-${{ github.workflow }}
@@ -366,14 +368,17 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  # ── release (dev-* tags) ────────────────────────────────────────────────────
+  # ── release: dev files into the tag's release ─────────────────────────────
   release:
-    name: Create GitHub Release
-    if: startsWith(github.ref, 'refs/tags/dev-')
+    name: Add dev files to the release
+    if: startsWith(github.ref, 'refs/tags/')
     needs: assemble
     runs-on: ubuntu-24.04
     permissions:
       contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ github.ref_name }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -392,24 +397,42 @@ jobs:
           scripts/fetch-toolchain.sh
           tar --exclude=.git --sort=name --owner=0 --group=0 --numeric-owner \
             --mtime="@$(git log -1 --format=%ct)" \
-            --transform "s|^|linux-libre-vm-${GITHUB_REF_NAME}/|" \
+            --transform "s|^|linux-libre-vm-${TAG}/|" \
             -cf - Makefile README.md mk scripts kernel-*.config docs sources/toolchain sources/linux-libre |
-            xz -T0 -6 > release/linux-libre-vm-dev-src-${GITHUB_REF_NAME}.tar.xz
+            xz -T0 -6 > release/linux-libre-vm-dev-src-${TAG}.tar.xz
 
+      # SHA256SUMS belongs to the base files; the dev files get their own
       - name: Checksums
         working-directory: release
         run: |
-          sha256sum * > SHA256SUMS
-          cat SHA256SUMS
+          sha256sum * > SHA256SUMS-dev
+          cat SHA256SUMS-dev
           ls -lh
 
-      - name: Release notes
+      # build-release.yml creates the release (base images, notes); it may
+      # still be running: wait for it, up to 3 hours
+      - name: Wait for the release
         run: |
-          cat > notes.md <<EOF
-          Dev images: the base image plus a toolchain built from pinned sources
-          (gcc, binutils, glibc, make, perl, Python, Node.js) and cross compilers
-          for seven targets under \`/opt/cross\`. See
-          [docs/ci-dev.md](https://github.com/${GITHUB_REPOSITORY}/blob/${GITHUB_REF_NAME}/docs/ci-dev.md).
+          for i in $(seq 180); do
+            gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 && exit 0
+            sleep 60
+          done
+          echo "::error::release $TAG does not exist (did Build & Release fail?)"; exit 1
+
+      - name: Upload dev files
+        run: gh release upload "$TAG" release/* --clobber --repo "$GITHUB_REPOSITORY"
+
+      - name: Add the dev files to the release notes
+        run: |
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body -q .body > notes.md
+          grep -q '^### Dev images' notes.md || cat >> notes.md <<EOF
+
+          ### Dev images
+
+          The base image plus a toolchain built from pinned sources (gcc, binutils,
+          glibc, make, perl, Python, Node.js) and cross compilers for seven targets
+          under \`/opt/cross\`. See
+          [docs/ci-dev.md](https://github.com/${GITHUB_REPOSITORY}/blob/${TAG}/docs/ci-dev.md).
 
           | File | Content |
           |------|---------|
@@ -417,12 +440,7 @@ jobs:
           | \`linux-libre-vmlinuz-dev-<arch>\` | kernel to boot it |
           | \`cross-<triplet>.<host arch>.tar.gz\` | each cross toolchain on its own, relocatable |
           | \`MANIFEST-dev-<arch>.txt\` | source commits, build host, sizes |
-          | \`linux-libre-vm-dev-src-*.tar.xz\` | corresponding source |
+          | \`linux-libre-vm-dev-src-${TAG}.tar.xz\` | corresponding source |
+          | \`SHA256SUMS-dev\` | checksums of the dev files |
           EOF
-
-      - uses: softprops/action-gh-release@v2
-        with:
-          name: Dev image ${{ github.ref_name }}
-          body_path: notes.md
-          files: release/*
-          prerelease: true
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file notes.md
