@@ -155,7 +155,8 @@ The VM is created through UTM's AppleScript API with these settings:
 - network card `virtio-net-device` in UTM's shared (NAT) mode
 - drives with interface "none" (UTM attaches no guest device to them):
   - `DISK`, imported into the bundle
-  - `KERNEL` and `INITRD` as **removable** drives, so UTM keeps a sandbox bookmark to the original files
+  - without a shared folder, `KERNEL` and `INITRD` as **removable** drives, so UTM keeps a sandbox bookmark to the original files
+- with a shared folder, `KERNEL` and `INITRD` copied into it as `.vm-boot/kernel` and `.vm-boot/initrd`, which QEMU can read through the folder's access
 - QEMU additional arguments:
   `-kernel … -append "…" [-initrd …] -device virtio-blk-device,drive=drive<disk-id>`
   `-device virtio-9p-device,fsdev=virtfs0,mount_tag=share` (mmio 9p on UTM's VirtFS backend)
@@ -174,7 +175,8 @@ Found while building the runner with UTM 5.0.4, still true in 5.0.6:
 |-----------|-------------|
 | `make new virtual machine` with a full configuration fails (`-1700 Can't make … into type qemu configuration`) | Create with `{name, architecture}` only, then `update configuration` |
 | Each additional-argument string is split on whitespace | The `-append` value is wrapped in `"…"`; paths must not contain spaces |
-| `file urls` on an additional argument do **not** let QEMU read that file (`could not load kernel`) | Kernel/initrd are also added as removable drives, which grants read access |
+| `file urls` on an additional argument do **not** let QEMU read that file (`could not load kernel`) | Kernel/initrd are read from the shared folder, or added as removable drives, which grants read access |
+| Removable-drive bookmarks can be lost (seen after UTM or the Mac restarted); QEMU then fails with `could not load kernel`, both from `start` and from the UTM app | With a shared folder, `start` copies a kernel/initrd read that way into `SHARE/.vm-boot` and points `-kernel`/`-initrd` there; a file in the VM's own bundle is not readable either |
 | A file given with `-drive` in additional arguments is not writable (`Operation not permitted`) | The disk is imported as a UTM drive instead |
 | The bare word `none` means directory share mode `none` | Drive interface "none" is written as `«constant QeDiQdIN»` |
 | Drive IDs appear as `drive<ID>` on the QEMU command line | Our `virtio-blk-device` refers to the imported disk that way |

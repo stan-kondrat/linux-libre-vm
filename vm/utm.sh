@@ -134,8 +134,21 @@ cmd_create() {
 		case $share in *[[:space:],]*) die "SHARE path must not contain spaces or ',': $share" ;; esac
 	fi
 	[ -z "$BUNDLE" ] || [ ! -e "$BUNDLE" ] || die "$BUNDLE already exists (use 'delete' or 'recreate')"
+	# QEMU may read only files UTM grants it. With a shared folder, the
+	# kernel and initrd are copied into it (SHARE/.vm-boot); without one they
+	# are removable drives, whose bookmarks UTM can lose (see boot_files)
+	boot_kernel=$kernel boot_initrd=$initrd
+	if [ -n "$share" ]; then
+		mkdir -p "$share/.vm-boot"
+		cp "$kernel" "$share/.vm-boot/kernel"
+		boot_kernel=$share/.vm-boot/kernel
+		if [ -n "$initrd" ]; then
+			cp "$initrd" "$share/.vm-boot/initrd"
+			boot_initrd=$share/.vm-boot/initrd
+		fi
+	fi
 
-	osascript - "$NAME" "$kernel" "$initrd" "$disk" "$APPEND" "$MEM" "$CPUS" "$NET" "$share" <<-'EOF' >/dev/null
+	osascript - "$NAME" "$boot_kernel" "$boot_initrd" "$disk" "$APPEND" "$MEM" "$CPUS" "$NET" "$share" <<-'EOF' >/dev/null
 	on run argv
 		set {vmName, kernelPath, initrdPath, diskPath, cmdline, memMB, cpuN, netMode, sharePath} to argv
 		-- Resolve file references outside the tell block (inside, UTM would handle them)
@@ -173,13 +186,16 @@ cmd_create() {
 			-- because the bare word is ambiguous with directory share mode.
 			--  * DISK is imported (copied into the .utm bundle as qcow2), so
 			--    UTM owns write access; we attach an mmio device to it below.
-			--  * KERNEL/INITRD are removable drives: UTM keeps a sandbox
-			--    bookmark to the original file, which lets QEMU read it for
-			--    -kernel/-initrd. (A 'file urls' argument does not grant access.)
+			--  * Without a shared folder, KERNEL/INITRD are removable drives:
+			--    UTM keeps a sandbox bookmark to the original file, which lets
+			--    QEMU read it for -kernel/-initrd. (A 'file urls' argument does
+			--    not grant access.) With one, they are in it.
 			set drvs to {}
 			if diskPath is not "" then set drvs to drvs & {{interface:«constant QeDiQdIN», source:diskFile}}
-			set drvs to drvs & {{interface:«constant QeDiQdIN», removable:true, source:kernelFile}}
-			if initrdPath is not "" then set drvs to drvs & {{interface:«constant QeDiQdIN», removable:true, source:initrdFile}}
+			if sharePath is "" then
+				set drvs to drvs & {{interface:«constant QeDiQdIN», removable:true, source:kernelFile}}
+				if initrdPath is not "" then set drvs to drvs & {{interface:«constant QeDiQdIN», removable:true, source:initrdFile}}
+			end if
 			set drives of cfg to drvs
 
 			set nics to network interfaces of cfg
@@ -282,11 +298,74 @@ utmctl_quiet() {
 	{ "$UTMCTL" "$@" 2>&1 >&3 | grep -v 'OSStatus error -10004' >&2; } 3>&1 || true
 }
 
+# QEMU additional arguments of the VM, one per line
+qemu_args() {
+	osascript - "$NAME" <<-'EOF'
+	on run argv
+		tell application "UTM"
+			set out to ""
+			set cfg to configuration of virtual machine named (item 1 of argv)
+			repeat with a in (qemu additional arguments of cfg)
+				set out to out & (argument string of a) & linefeed
+			end repeat
+		end tell
+		return out
+	end run
+	EOF
+}
+
+# VMs created before kernel and initrd went into the shared folder read them
+# through removable-drive bookmarks, which UTM can lose (QEMU then fails with
+# "could not load kernel"). Copy them into SHARE/.vm-boot and point
+# -kernel/-initrd there.
+boot_files() {
+	[ -n "$SHARE" ] && [ -d "$SHARE" ] || return 0
+	dir=$(cd "$SHARE" && pwd)/.vm-boot
+	args=$(qemu_args)
+	k=$(echo "$args" | awk 'p { print; exit } $0 == "-kernel" { p = 1 }')
+	rd=$(echo "$args" | awk 'p { print; exit } $0 == "-initrd" { p = 1 }')
+	[ -n "$k" ] && [ "$k" != "$dir/kernel" ] || return 0
+	[ -f "$k" ] || die "kernel $k not found (use 'recreate')"
+	mkdir -p "$dir"
+	cp "$k" "$dir/kernel"
+	ni=
+	if [ -n "$rd" ]; then
+		[ -f "$rd" ] || die "initrd $rd not found (use 'recreate')"
+		cp "$rd" "$dir/initrd"
+		ni=$dir/initrd
+	fi
+	osascript - "$NAME" "$dir/kernel" "$ni" <<-'EOF' >/dev/null
+	on run argv
+		set {vmName, kernelPath, initrdPath} to argv
+		tell application "UTM"
+			set vm to virtual machine named vmName
+			set cfg to configuration of vm
+			set out to {}
+			set prev to ""
+			repeat with a in (qemu additional arguments of cfg)
+				set s to argument string of a
+				if prev is "-kernel" then
+					set s to kernelPath
+				else if prev is "-initrd" then
+					set s to initrdPath
+				end if
+				set end of out to {argument string:s}
+				set prev to s
+			end repeat
+			set qemu additional arguments of cfg to out
+			update configuration of vm with cfg
+		end tell
+	end run
+	EOF
+	echo "moved the kernel${rd:+ and initrd} into $dir"
+}
+
 cmd_start() {
 	case $(vm_status) in
 	started) echo "$NAME is already running"; return 0 ;;
 	"not found") die "VM '$NAME' does not exist (use 'create')" ;;
 	esac
+	boot_files
 	utmctl_quiet start --hide "$NAME"
 	i=0
 	until [ "$(vm_status)" = started ]; do
