@@ -74,6 +74,7 @@ All third-party sources are managed as git submodules under `sources/` — **nev
 | runit | `https://github.com/g-pape/runit/` | `v2.3.1` | init system |
 | dhcpcd | `https://github.com/NetworkConfiguration/dhcpcd.git` | `v10.3.2` | DHCP client |
 | ncurses | `https://github.com/ThomasDickey/ncurses-snapshots.git` | `v6_6` | terminal library (bash, vim, procps-ng, util-linux) |
+| libxcrypt | `https://github.com/besser82/libxcrypt.git` | `v4.5.2` | libcrypt (`crypt()`) for sshd's password logins |
 | openssl | `https://github.com/openssl/openssl.git` | `openssl-3.6.5` | libcrypto for OpenSSH |
 | openssh | `https://github.com/openssh/openssh-portable.git` | `V_10_6_P1` | ssh server + client |
 
@@ -110,7 +111,7 @@ linux-libre-vm/
 │   ├── fetch-submodules.sh      shallow, pinned submodule fetch
 │   ├── fetch-toolchain.sh       toolchain sources + pinned tarballs
 │   ├── release-manifest.sh      release manifest (versions, libraries, files)
-│   └── smoke-test.sh            boot an image, check console, DHCP, ssh (make test, CI)
+│   └── smoke-test.sh            boot an image, check console, DHCP, ssh key/password login (make test, CI)
 │
 ├── sources/                      git submodules (NEVER modified)
 │   └── <pkg>/                    per-package source trees
@@ -157,6 +158,8 @@ The Makefile orchestrates all builds through modular fragments under `mk/`.
 | make | Build system driver |
 | gcc | Host native compiler |
 | autoconf / automake | Regenerating configure scripts |
+| libtool, libltdl-dev (Debian) / libltdl-devel (Void) | `libtoolize`; `ltdl.m4` (libxcrypt's `LT_SYS_SYMBOL_USCORE`) |
+| perl | libxcrypt's generated headers and symbol map |
 | gettext | i18n framework (gnulib bootstrap) |
 | texinfo | `makeinfo` for documentation |
 | patch | Applying source patches |
@@ -197,7 +200,7 @@ make qemu-x86_64                   # boots to bash shell (QEMU q35 + virtio-pci)
 make qemu-arm64                    # boots to bash shell (QEMU virt + virtio-pci)
 
 # Tests
-make test                          # boot each image: console, DHCP, ssh login
+make test                          # boot each image: console, DHCP, ssh key + password login
 make test-x86_64                   # one arch (scripts/smoke-test.sh)
 
 # Logging
@@ -224,25 +227,30 @@ sources/<pkg>  ──copy+patch──→  sources-patched/<pkg>/  (once)
 - **On x86_64 host:** x86_64 = native `gcc`, arm64 = `aarch64-linux-gnu-` cross
 - **On aarch64 host:** arm64 = native `gcc`, x86_64 = `x86_64-linux-gnu-` cross
 
-### Packages (18 userland + 1 kernel)
+### Packages (19 userland + 1 kernel)
 
-ncurses coreutils bash grep sed gawk findutils diffutils gzip tar vim iproute2 procps-ng util-linux runit dhcpcd openssl openssh
+ncurses coreutils bash grep sed gawk findutils diffutils gzip tar vim iproute2 procps-ng util-linux runit dhcpcd libxcrypt openssl openssh
 
 The list is `USERLAND_PKGS` in `mk/00-vars.mk`. Optional features are set
 explicitly per package there (`<pkg>_CONFIGURE`): without that, configure
 enables whatever libraries the build host happens to have (OpenSSL, GMP, PAM,
 readline, PCRE2, libelf, libcrypt, zlib ...), and native and cross builds
 produce different images. The libraries the image does need come from pinned
-sources: OpenSSL's libcrypto and ncurses (libncursesw, with built-in
-descriptions for the usual terminals; `/usr/share/terminfo` is read when
-present). From the build host only glibc remains. Per-arch facts (serial console, kernel image, dynamic linker)
+sources: OpenSSL's libcrypto, libxcrypt's libcrypt.so.2 (strong hashes:
+yescrypt, SHA-512, bcrypt ..., plus glibc's SHA-256, MD5, DES; no obsolete
+API) and ncurses (libncursesw, with built-in descriptions for the usual
+terminals; `/usr/share/terminfo` is read when present). From the build host
+only glibc remains. Per-arch facts (serial console, kernel image, dynamic linker)
 are one table there too; the build, install, kernel, init and QEMU rules are
 macros over it.
 
 ### SSH
 
-Both images run an OpenSSH server (OpenSSL's libcrypto built from the pinned
-source, nothing from the build host): root, key login only. The published
+Both images run an OpenSSH server (OpenSSL's libcrypto and libxcrypt's
+libcrypt built from the pinned sources, nothing from the build host): root,
+key login only. Password logins work for users with a hash in `/etc/shadow`
+(`$y$`, `$6$` ...) once `PasswordAuthentication yes` is set for them;
+images built on this one, like linux-devbox-vm, do that for their user. The published
 image contains no passwords and no keys: root has no password (`*`; the
 serial console logs in without one), and host keys are created on each VM's
 first boot. To log in over ssh, add your key on the serial console first:
@@ -284,8 +292,9 @@ Patches live in `sources-patches/<pkg>/` and apply once during copy to `sources-
 
 `make test` and CI boot each image under QEMU and check it with
 `scripts/smoke-test.sh`: Linux-libre kernel, writable root filesystem, DHCP
-address, and an ssh login as root with a key added on the serial console
-(`make test-dev` also checks the dev image's compilers, Python and Node.js).
+address, an ssh login as root with a key added on the serial console, and an
+ssh password login as a test user with a SHA-512 (`$6$`) password, also set
+up on the console (`make test-dev` also checks the dev image's compilers, Python and Node.js).
 `make qemu-<arch> BOOT_DIAG=1` prints boot diagnostics (memory, processes,
 network) from runit stage 1.
 

@@ -7,6 +7,10 @@
 #     DHCP address on the network
 #   - ssh: a throwaway key, added on the serial console (the image has
 #     none), then login as root through a forwarded port
+#   - ssh password login: a test user with a SHA-512 ($6$) password and
+#     PasswordAuthentication for it only, both set up on the serial console
+#     (images built on this one, like linux-devbox-vm, log in this way);
+#     sshd checks the hash with crypt() from /lib/libcrypt.so.2
 #   - PROFILE=dev also: gcc/g++ compile and run, every cross compiler under
 #     /opt/cross compiles, make, python3 (zlib, bz2), node
 #
@@ -37,6 +41,13 @@ tmp=$(mktemp -d)
 log=$tmp/log
 ssh-keygen -q -t rsa -b 3072 -N '' -C smoke-test -f "$tmp/key"
 pub=$(cat "$tmp/key.pub")
+# Password login test user. The hash is sha512crypt of PW_PASS with a fixed
+# salt (the image has no tool to make one; the VM is a snapshot and its ssh
+# port is on 127.0.0.1 only). ssh reads the password from SSH_ASKPASS.
+PW_USER=smoketest PW_UID=1000 PW_PASS=smoke-test-password
+PW_HASH='$6$smoketestsalt$d2Y.v867BjLvGxjDK1k/fDxbdBqxKFTJdLveGbAdA9mCd1gpnXckudFi3IufImloKcxcU4APBYxEuLvMvQZxP1'
+printf '#!/bin/sh\necho %s\n' "$PW_PASS" >"$tmp/askpass"
+chmod 700 "$tmp/askpass"
 cleanup() { vm/qemu.sh stop >/dev/null 2>&1 || true; rm -rf "$tmp"; }
 trap cleanup EXIT
 
@@ -54,12 +65,19 @@ vm/qemu.sh start
 vm/qemu.sh exec 'uname -sr' 'test -w / && echo rootfs-writable' \
 	'for i in $(seq 30); do ip -4 -o addr show scope global | grep -q inet && break; sleep 1; done; ip -4 -o addr show scope global' \
 	'mkdir -p /root/.ssh && chmod 700 /root/.ssh' \
-	"echo '$pub' >/root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys && echo key-added" |
+	"echo '$pub' >/root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys && echo key-added" \
+	'test -f /lib/libcrypt.so.2 && echo libcrypt-present' \
+	"echo '$PW_USER:x:$PW_UID:$PW_UID::/home/$PW_USER:/bin/sh' >>/etc/passwd && echo '$PW_USER:x:$PW_UID:' >>/etc/group" \
+	"echo '$PW_USER:$PW_HASH:20000:0:99999:7:::' >>/etc/shadow && mkdir -p /home/$PW_USER && chown $PW_UID:$PW_UID /home/$PW_USER" \
+	"echo 'Match User $PW_USER' >>/etc/ssh/sshd_config && echo 'PasswordAuthentication yes' >>/etc/ssh/sshd_config" \
+	'for i in $(seq 120); do [ -s /run/sshd.pid ] && break; sleep 1; done; kill -HUP "$(cat /run/sshd.pid)" && echo password-user-added' |
 	tee "$log"
 check '^Linux .*gnu' "kernel is Linux-libre"
 check '^rootfs-writable' "root filesystem writable"
 check ' inet [0-9]' "DHCP address"
 check '^key-added' "ssh key added on the console"
+check '^libcrypt-present' "/lib/libcrypt.so.2 present"
+check '^password-user-added' "password user added on the console"
 
 # sshd generates its host keys on the first start: retry for a while
 ssh_run() {
@@ -75,6 +93,26 @@ until ssh_run 'echo ssh-ok; echo "processes: $(ps -A --no-headers | wc -l) (user
 done
 cat "$log"
 check '^ssh-ok' "ssh login as root"
+
+# Password only (no keys, no ssh config files), non-interactive: ssh runs
+# SSH_ASKPASS for the password even with a terminal (SSH_ASKPASS_REQUIRE).
+# sshd is up (the root login above): one attempt, plus two for a slow start
+ssh_pw() {
+	SSH_ASKPASS="$tmp/askpass" SSH_ASKPASS_REQUIRE=force \
+	ssh -F /dev/null -p "$SSH_PORT" -o BatchMode=no -o ConnectTimeout=10 \
+		-o PreferredAuthentications=password -o PubkeyAuthentication=no \
+		-o NumberOfPasswordPrompts=1 \
+		-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
+		"$PW_USER@127.0.0.1" "$@" </dev/null
+}
+i=0
+until ssh_pw 'echo "ssh-password-ok $(id -un)"' >"$log" 2>&1; do
+	i=$((i + 1))
+	[ $i -lt 3 ] || break
+	sleep 5
+done
+cat "$log"
+check "^ssh-password-ok $PW_USER" "ssh password login (SHA-512 hash)"
 
 if [ "$PROFILE" = dev ]; then
 	ssh_run sh -s >"$log" 2>&1 <<-'EOF' || true

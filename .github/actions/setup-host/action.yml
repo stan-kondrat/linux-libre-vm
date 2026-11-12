@@ -36,7 +36,7 @@ runs:
         QEMU: ${{ inputs.qemu }}
       run: |
         p=
-        [ "$BUILD" = true ] && p="$p make gcc g++ ccache autoconf automake libtool gettext texinfo
+        [ "$BUILD" = true ] && p="$p make gcc g++ ccache autoconf automake libtool libltdl-dev gettext texinfo
           patch xz-utils rsync bc bison flex perl pkg-config elfutils libelf-dev libncurses-dev
           e2fsprogs file"
         [ "$TOOLCHAIN" = true ] && p="$p make gcc g++ bison flex gawk m4 texinfo perl python3
