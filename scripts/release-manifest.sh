@@ -31,8 +31,8 @@ echo
 echo "## Toolchain"
 $CC --version | head -1
 
-# Libraries in the image that came from the build host (glibc, libgcc,
-# ncurses, ...): name the distribution package and version they belong to
+# Libraries in the image that came from the build host (glibc, libgcc ...):
+# name the distribution package and version they belong to
 if command -v dpkg >/dev/null; then
 	echo
 	echo "## Host libraries copied into the image (distribution packages)"

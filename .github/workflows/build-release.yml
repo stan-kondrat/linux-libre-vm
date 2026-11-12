@@ -3,8 +3,8 @@
 #
 # Builds the x86_64 and arm64 userland + kernel, each natively on a runner of
 # its architecture, creates disk images, boots them under QEMU
-# (scripts/smoke-test.sh: console, DHCP, ssh), and publishes GitHub Releases
-# on tag push.
+# (scripts/smoke-test.sh: console, DHCP, ssh key and password logins), and
+# publishes GitHub Releases on tag push.
 #
 # Caching strategy (3 layers):
 #   1. sources-patched/ — patched source trees (shared across arches)
@@ -201,8 +201,8 @@ jobs:
   # ── Boot test ─────────────────────────────────────────────────────────────
   # Boots the staged image under QEMU on a runner of the same architecture
   # (KVM when the runner offers it) and checks it with scripts/smoke-test.sh:
-  # serial console, DHCP, ssh login. Fails the run, and so blocks the release,
-  # when the system does not come up.
+  # serial console, DHCP, ssh key and password logins. Fails the run, and so
+  # blocks the release, when the system does not come up.
   test:
     name: Boot test (${{ matrix.arch }})
     needs: build

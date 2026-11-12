@@ -408,6 +408,39 @@ install-runit-$(1): build-runit-$(1)
 	done
 endef
 
+# ── libxcrypt (libcrypt.so.2: crypt() for sshd's password logins) ─────────
+# Built from the pinned source, so sshd never links the build host's
+# libcrypt, natively and cross alike. Hash methods: the strong ones
+# (yescrypt, scrypt, bcrypt, SHA-512) and glibc's (SHA-256, MD5, DES), the
+# hashes /etc/shadow files contain; no obsolete API (encrypt, setkey,
+# fcrypt), hence the soname libcrypt.so.2. Only libcrypt.so.2 goes into the
+# rootfs; crypt.h and the library are staged in libxcrypt-stage/ for the
+# OpenSSH build. Built from git: autoreconf generates configure, and perl
+# (>= 5.14, build machine) generates headers and the symbol map.
+LIBXCRYPT_CONFIGURE := --prefix=/usr --libdir=/usr/lib \
+    --enable-hashes=strong,glibc --enable-obsolete-api=no \
+    --disable-static --disable-xcrypt-compat-files
+
+define LIBXCRYPT_BUILD_RULES
+$$(eval $$(call COPY_PKG,libxcrypt,$(1)))
+
+build-libxcrypt-$(1): $$(BUILD_DIR_$(1))/libxcrypt/.built
+
+$$(BUILD_DIR_$(1))/libxcrypt/.built: $$(BUILD_DIR_$(1))/libxcrypt/.copied
+	@echo "=== Building libxcrypt for $(1) ==="
+	cd "$$(BUILD_DIR_$(1))/libxcrypt" && autoreconf -fi
+	cd "$$(BUILD_DIR_$(1))/libxcrypt" && ./configure $$(call HOST_FLAG,$(1)) $$(LIBXCRYPT_CONFIGURE) \
+	  CFLAGS="$$(COMMON_CFLAGS)" LDFLAGS="$$(COMMON_LDFLAGS)"
+	$$(MAKE) $$(PARALLEL) -C "$$(BUILD_DIR_$(1))/libxcrypt"
+	rm -rf "$$(BUILD_DIR_$(1))/libxcrypt-stage"
+	$$(MAKE) -C "$$(BUILD_DIR_$(1))/libxcrypt" install DESTDIR="$$(BUILD_DIR_$(1))/libxcrypt-stage"
+	@touch "$$@"
+
+install-libxcrypt-$(1): build-libxcrypt-$(1)
+	mkdir -p "$$(ROOTFS_$(1))/lib"
+	cp -L "$$(BUILD_DIR_$(1))/libxcrypt-stage/usr/lib/libcrypt.so.2" "$$(ROOTFS_$(1))/lib/"
+endef
+
 # ── OpenSSL (libcrypto only, for OpenSSH) ─────────────────────────────────
 # Built from the pinned source, so the image never gets the build host's
 # libcrypto. Only libcrypto.so.3 goes into the rootfs; headers and libraries
@@ -440,12 +473,14 @@ install-openssl-$(1): build-openssl-$(1)
 endef
 
 # ── OpenSSH (ssh, sshd, scp, sftp, ssh-keygen ...) ────────────────────────
-# Against the staged OpenSSL; no PAM, zlib, Kerberos, FIDO, PKCS#11 or
-# login records. No libcrypt either (the build host's): crypt() serves only
-# password logins, which sshd_config disables; with ac_cv_*crypt=no OpenSSH
-# falls back to OpenSSL's DES_crypt for the remaining code path. Host keys are not generated here: the sshd service creates
-# them on first boot (every VM gets its own). Installed programs that a VM
-# does not need are removed in install-openssh.
+# Against the staged OpenSSL and libxcrypt; no PAM, zlib, Kerberos, FIDO,
+# PKCS#11 or login records. sshd checks passwords with crypt() from the
+# staged libcrypt.so.2 (the hashes in /etc/shadow: yescrypt, SHA-512 ...).
+# The base image's sshd_config allows key logins only; images built on it
+# (linux-devbox-vm) enable PasswordAuthentication. Host keys are not
+# generated here: the sshd service creates them on first boot (every VM
+# gets its own). Installed programs that a VM does not need are removed in
+# install-openssh.
 OPENSSH_CONFIGURE := --prefix=/usr --sysconfdir=/etc/ssh --libexecdir=/usr/libexec \
     --with-privsep-path=/var/empty --with-privsep-user=sshd --with-pid-dir=/run \
     --with-default-path=/usr/local/bin:/usr/bin:/bin \
@@ -453,29 +488,39 @@ OPENSSH_CONFIGURE := --prefix=/usr --sysconfdir=/etc/ssh --libexecdir=/usr/libex
     --without-pam --without-zlib --without-selinux --without-kerberos5 \
     --without-libedit --without-audit --without-security-key-builtin --without-rpath \
     --disable-security-key --disable-pkcs11 --disable-strip \
-    --disable-lastlog --disable-utmp --disable-utmpx --disable-wtmp --disable-wtmpx \
-    ac_cv_lib_crypt_crypt=no ac_cv_func_crypt=no
+    --disable-lastlog --disable-utmp --disable-utmpx --disable-wtmp --disable-wtmpx
 
 define OPENSSH_BUILD_RULES
 $$(eval $$(call COPY_PKG,openssh,$(1)))
 
 build-openssh-$(1): $$(BUILD_DIR_$(1))/openssh/.built
 
-$$(BUILD_DIR_$(1))/openssh/.built: $$(BUILD_DIR_$(1))/openssh/.copied $$(BUILD_DIR_$(1))/openssl/.built
+$$(BUILD_DIR_$(1))/openssh/.built: $$(BUILD_DIR_$(1))/openssh/.copied $$(BUILD_DIR_$(1))/openssl/.built \
+    $$(BUILD_DIR_$(1))/libxcrypt/.built
 	@echo "=== Building openssh for $(1) ==="
 	cd "$$(BUILD_DIR_$(1))/openssh" && autoreconf -fi
 	# LD_LIBRARY_PATH: configure runs test programs (native builds), which must
-	# load the staged libcrypto, not the build host's (a different OpenSSL
-	# fails the header/library version check). Only for configure: the
-	# binaries get no rpath, the image has this libcrypto in /lib.
+	# load the staged libcrypto and libcrypt, not the build host's (a different
+	# OpenSSL fails the header/library version check). Only for configure: the
+	# binaries get no rpath, the image has both libraries in /lib.
+	# CPPFLAGS/LDFLAGS: crypt.h and -lcrypt from libxcrypt-stage, found before
+	# the build host's (or the cross sysroot's)
 	cd "$$(BUILD_DIR_$(1))/openssh" && \
-	  LD_LIBRARY_PATH="$$(BUILD_DIR_$(1))/openssl-stage/usr/lib" ./configure $$(call HOST_FLAG,$(1)) \
+	  LD_LIBRARY_PATH="$$(BUILD_DIR_$(1))/openssl-stage/usr/lib:$$(BUILD_DIR_$(1))/libxcrypt-stage/usr/lib" \
+	  ./configure $$(call HOST_FLAG,$(1)) \
 	  $$(OPENSSH_CONFIGURE) --with-ssl-dir="$$(BUILD_DIR_$(1))/openssl-stage/usr" \
-	  CFLAGS="$$(COMMON_CFLAGS)" LDFLAGS="$$(COMMON_LDFLAGS)"
+	  CPPFLAGS="-I$$(BUILD_DIR_$(1))/libxcrypt-stage/usr/include" CFLAGS="$$(COMMON_CFLAGS)" \
+	  LDFLAGS="$$(COMMON_LDFLAGS) -L$$(BUILD_DIR_$(1))/libxcrypt-stage/usr/lib"
 	$$(MAKE) $$(PARALLEL) -C "$$(BUILD_DIR_$(1))/openssh"
+	# Password logins: sshd-session (its privileged monitor checks the
+	# password) must take crypt() from libcrypt.so.2. Without it OpenSSH
+	# falls back to OpenSSL's DES_crypt, which verifies no SHA-512 or
+	# yescrypt hash, and every password login fails
+	$$(CROSS_$(1))readelf -d "$$(BUILD_DIR_$(1))/openssh/sshd-session" | grep -q 'NEEDED.*\[libcrypt\.so\.2\]' || \
+	  { echo "ERROR: sshd-session does not link libcrypt.so.2"; exit 1; }
 	@touch "$$@"
 
-install-openssh-$(1): build-openssh-$(1) install-openssl-$(1)
+install-openssh-$(1): build-openssh-$(1) install-openssl-$(1) install-libxcrypt-$(1)
 	$$(MAKE) -C "$$(BUILD_DIR_$(1))/openssh" DESTDIR="$$(ROOTFS_$(1))" install-nokeys
 	cd "$$(ROOTFS_$(1))" && rm -f usr/bin/ssh-keyscan usr/libexec/ssh-keysign \
 	  usr/libexec/ssh-pkcs11-helper usr/libexec/ssh-sk-helper

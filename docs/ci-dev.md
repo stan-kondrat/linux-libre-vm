@@ -93,9 +93,9 @@ room on its disk.
 
 `assemble` boots the dev image with `scripts/smoke-test.sh PROFILE=dev` (the
 same script as `make test-dev` and the base workflow's boot test): serial
-console, DHCP and ssh login with a throwaway key, then over ssh compiling and
-running a C and a C++ program, one cross compiler per target (`<triplet>-gcc
--c`), `make`, `python3 -c 'import zlib, bz2'` and `node -e`. The run fails,
+console, DHCP, ssh login with a throwaway key and ssh password login as a
+test user (SHA-512 hash), then over ssh compiling and running a C and a C++
+program, one cross compiler per target (`<triplet>-gcc -c`), `make`, `python3 -c 'import zlib, bz2'` and `node -e`. The run fails,
 and no dev files are added to the release, if any check fails. QEMU uses KVM when the runner
 offers it, TCG otherwise (slow but enough for these commands).
 

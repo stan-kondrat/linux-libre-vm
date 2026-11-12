@@ -70,7 +70,7 @@ BUILD_DIR_arm64         := $(CURDIR)/sources-build/arm64
 # Userland packages, each a submodule sources/<pkg> with build rules in
 # mk/04-build-rules.mk, declared per target in mk/05-packages.mk
 USERLAND_PKGS := ncurses coreutils bash grep sed gawk findutils diffutils gzip tar vim \
-                 iproute2 procps-ng util-linux runit dhcpcd openssl openssh
+                 iproute2 procps-ng util-linux runit dhcpcd libxcrypt openssl openssh
 
 # ── Per-arch facts ─────────────────────────────────────────────────────────
 # Everything that differs between the targets lives here; the rules are
