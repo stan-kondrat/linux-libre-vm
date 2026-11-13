@@ -1,0 +1,276 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# Base images: userland + kernel for x86_64 and arm64 (reusable workflow)
+#
+# Called by build-release.yml. Builds each architecture natively on a runner
+# of its own, creates the disk image, boots it under QEMU
+# (scripts/smoke-test.sh: console, DHCP, ssh) and uploads the release files
+# as artifacts of the calling run:
+#
+#   release-<arch>   image (.img, .img.xz), kernel, config, System.map, MANIFEST
+#   sources          linux-libre-vm-src.tar.xz (complete corresponding source)
+#
+# build-release.yml publishes them, or a later tag run of the same commit
+# publishes them from this run (so they are kept for 30 days).
+#
+# Caching strategy (3 layers):
+#   1. sources-patched/ — patched source trees (shared across arches)
+#   2. ccache — compiler object cache (per-arch)
+#   3. sources-build/ — full build output + stamp files (per-arch, most impactful)
+#
+# Prerequisites:
+#   - Most submodules use HTTPS; linux-libre uses git:// (FSFLA limitation)
+#   - GitHub Actions runners support git:// protocol on port 9418
+#   - If linux-libre fetch fails, mirror it to GitHub and update .gitmodules
+# ═══════════════════════════════════════════════════════════════════════════════
+
+name: Base images
+
+on:
+  workflow_call:
+
+jobs:
+  build:
+    name: Build (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          - { arch: x86_64, runner: ubuntu-24.04 }
+          - { arch: arm64, runner: ubuntu-24.04-arm }
+      fail-fast: false
+
+    steps:
+      # ── Checkout ──────────────────────────────────────────────────────────
+      # linux-libre uses git:// protocol (FSFLA doesn't serve HTTPS).
+      # actions/checkout@v4 struggles with git:// submodules on runners,
+      # so we init them manually after checkout.
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      # ── Cache: submodule checkouts ────────────────────────────────────────
+      # sources/<pkg> (shallow .git + files) of every base submodule, keyed on
+      # their pinned commits. fetch-submodules.sh skips a submodule already at
+      # its pinned commit, so a hit fetches nothing; an older cache (restore-
+      # keys) fetches only the submodules whose commit changed. Spares the
+      # flaky upstream hosts (GNU HTTP 429/500, FSFLA git://) most runs.
+      - name: Submodule cache key
+        id: submodule-key
+        run: |
+          echo "hash=$(git ls-tree -r HEAD sources | grep -v '	sources/toolchain/' |
+            sha256sum | cut -c1-24)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache submodules
+        uses: actions/cache@v4
+        with:
+          path: |
+            sources/*
+            !sources/toolchain
+          key: submodules-${{ steps.submodule-key.outputs.hash }}
+          restore-keys: |
+            submodules-
+
+      - name: Initialize submodules
+        # Shallow, pinned-commit fetch, one submodule at a time with retries.
+        # Full `git submodule update --init --recursive` hits HTTP 429/500
+        # from the GNU hosts and clones ~GBs of history.
+        run: scripts/fetch-submodules.sh
+
+      # ── Cache keys ────────────────────────────────────────────────────────
+      - name: Compute cache keys
+        id: cache-keys
+        run: |
+          # Hash of submodule SHAs → invalidates when source code versions change
+          SUBMODULE_HASH=$(git submodule status | sha256sum | cut -d' ' -f1)
+          echo "submodule-hash=${SUBMODULE_HASH}" >> "$GITHUB_OUTPUT"
+
+          # Hash of build configuration → invalidates when build rules change
+          CONFIG_HASH=$( (sha256sum mk/*.mk mk/*.sh kernel-*.config .gitmodules 2>/dev/null) | sha256sum | cut -d' ' -f1)
+          echo "config-hash=${CONFIG_HASH}" >> "$GITHUB_OUTPUT"
+
+          echo "submodule-hash=${SUBMODULE_HASH}"
+          echo "config-hash=${CONFIG_HASH}"
+
+      # ── Cache: sources-patched/ ────────────────────────────────────────────
+      # Patched source trees (shared across arches). Keyed on submodule SHAs
+      # + patch files + mk rules that control patching. Exact key only: an
+      # older tree restored by prefix would keep its .patched stamps after a
+      # submodule bump, and make would not copy the new sources.
+      - name: Cache sources-patched
+        uses: actions/cache@v4
+        with:
+          path: sources-patched
+          key: sources-patched-${{ steps.cache-keys.outputs.submodule-hash }}-${{ hashFiles('sources-patches/**', 'mk/03-source-prep.mk') }}
+
+      # ── Cache: ccache ─────────────────────────────────────────────────────
+      # Compiler object cache (per-arch). Survives minor config changes via
+      # restore-keys fallback.
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ccache-native-${{ matrix.arch }}-${{ steps.cache-keys.outputs.config-hash }}
+          restore-keys: |
+            ccache-native-${{ matrix.arch }}-
+
+      # ── Cache: build output ────────────────────────────────────────────────
+      # Full per-arch build directories with `.built` stamp files. When the
+      # cache hits, `make` finds all stamp files and skips everything.
+      # Keyed on submodule SHAs + config. Exact key only: the stamps do not
+      # depend on mk/*.mk, so an older build restored by prefix would keep
+      # packages built with old configure flags; after a change everything is
+      # rebuilt (ccache makes that faster).
+      - name: Cache build output (${{ matrix.arch }})
+        uses: actions/cache@v4
+        with:
+          path: sources-build/${{ matrix.arch }}
+          key: build-native-${{ matrix.arch }}-${{ steps.cache-keys.outputs.submodule-hash }}-${{ steps.cache-keys.outputs.config-hash }}
+
+      - uses: ./.github/actions/setup-host
+        with:
+          build: true
+
+      - name: Set up ccache
+        run: |
+          sudo mkdir -p /usr/lib/ccache
+          for c in gcc g++ cc; do sudo ln -sf /usr/bin/ccache /usr/lib/ccache/$c; done
+          # Put the wrappers first on PATH for all later steps. (A step-level
+          # `PATH: "/usr/lib/ccache:${{ env.PATH }}"` breaks PATH: env.PATH only
+          # holds workflow-defined variables, so it expands to empty.)
+          echo "/usr/lib/ccache" >> "$GITHUB_PATH"
+          ccache --max-size=500M
+          ccache --zero-stats 2>/dev/null || true
+
+      - name: Check build environment
+        run: |
+          gcc -dumpmachine; gcc --version | head -1; make --version | head -1
+          make ARCH=${{ matrix.arch }} check-env
+
+      # ── Build ─────────────────────────────────────────────────────────────
+      - name: Build ${{ matrix.arch }} userland + kernel
+        run: |
+          # If build cache restored .built stamps, make will skip everything
+          make ARCH=${{ matrix.arch }} userland-${{ matrix.arch }}
+          make ARCH=${{ matrix.arch }} kernel
+
+      - name: Install ${{ matrix.arch }} to rootfs
+        run: |
+          make ARCH=${{ matrix.arch }} install-${{ matrix.arch }}
+          make ARCH=${{ matrix.arch }} install-kernel-${{ matrix.arch }}
+
+      - name: Show ccache stats
+        if: always()
+        run: ccache --show-stats || true
+
+      # ── Disk Image ────────────────────────────────────────────────────────
+      - name: Create ${{ matrix.arch }} disk image
+        run: make disk-image-${{ matrix.arch }}
+
+      # ── Stage release files ───────────────────────────────────────────────
+      # Final asset names, one artifact per arch: the test job boots exactly
+      # these files and build-release.yml publishes them.
+      - name: Stage ${{ matrix.arch }} release files
+        run: |
+          A=${{ matrix.arch }}
+          K=sources-build/$A/linux-libre
+          mkdir -p release
+          cp disks/disk-$A.img release/linux-libre-vm-$A.img
+          if [ "$A" = x86_64 ]; then
+            cp $K/arch/x86/boot/bzImage release/linux-libre-vmlinuz-$A
+          else
+            cp $K/arch/arm64/boot/Image.gz release/linux-libre-vmlinuz-$A
+          fi
+          cp $K/.config release/linux-libre-$A.config
+          cp $K/System.map release/linux-libre-$A.System.map
+          scripts/release-manifest.sh $A > release/MANIFEST-$A.txt
+          xz -T0 -9 -k release/linux-libre-vm-$A.img
+          ls -lh release/
+          sed -n '1,/^## Files/p' release/MANIFEST-$A.txt
+
+      - name: Upload ${{ matrix.arch }} release files
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.arch }}
+          path: release/
+          if-no-files-found: error
+          retention-days: 30
+
+  # ── Boot test ─────────────────────────────────────────────────────────────
+  # Boots the staged image under QEMU on a runner of the same architecture
+  # (KVM when the runner offers it) and checks it with scripts/smoke-test.sh:
+  # serial console, DHCP, ssh key and password logins. Fails the run, and so
+  # blocks the release, when the system does not come up.
+  test:
+    name: Boot test (${{ matrix.arch }})
+    needs: build
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          - { arch: x86_64, runner: ubuntu-24.04 }
+          - { arch: arm64, runner: ubuntu-24.04-arm }
+      fail-fast: false
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - uses: ./.github/actions/setup-host
+        with:
+          qemu: true
+
+      - name: Download ${{ matrix.arch }} release files
+        uses: actions/download-artifact@v4
+        with:
+          name: release-${{ matrix.arch }}
+          path: release/
+
+      - name: Smoke test
+        env:
+          ARCH: ${{ matrix.arch }}
+          KERNEL: release/linux-libre-vmlinuz-${{ matrix.arch }}
+          DISK: release/linux-libre-vm-${{ matrix.arch }}.img
+        run: scripts/smoke-test.sh
+
+      - name: QEMU log
+        if: failure()
+        run: cat build/qemu/*/qemu.log || true
+
+  # ── Source tarball ─────────────────────────────────────────────────────────
+  # The images contain GPL software (Linux-libre, bash, coreutils, ...): the
+  # release carries the exact corresponding source. GitHub's own "Source
+  # code" archives do not include submodules. Fetched fresh from upstream
+  # here, not from the submodule cache. The tag or "edge" goes into the asset
+  # name when it is published; the top directory names the commit.
+  sources:
+    name: Source tarball
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Fetch sources
+        run: scripts/fetch-submodules.sh
+
+      - name: Source tarball
+        run: |
+          mkdir -p release
+          tar --exclude=.git --exclude=sources/toolchain \
+            --sort=name --owner=0 --group=0 --numeric-owner \
+            --mtime="@$(git log -1 --format=%ct)" \
+            --transform "s|^|linux-libre-vm-$(git rev-parse --short=12 HEAD)/|" \
+            -cf - Makefile README.md mk scripts templates kernel-*.config \
+                  sources sources-patches vm docs |
+            xz -T0 -6 > release/linux-libre-vm-src.tar.xz
+          ls -lh release/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sources
+          path: release/
+          if-no-files-found: error
+          retention-days: 30

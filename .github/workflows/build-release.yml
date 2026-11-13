@@ -1,20 +1,19 @@
 # ═══════════════════════════════════════════════════════════════════════════════
-# CI + Release workflow for Super Minimal Linux Libre
+# CI + Release for Super Minimal Linux Libre
 #
-# Builds the x86_64 and arm64 userland + kernel, each natively on a runner of
-# its architecture, creates disk images, boots them under QEMU
-# (scripts/smoke-test.sh: console, DHCP, ssh key and password logins), and
-# publishes GitHub Releases on tag push.
+# One run builds the base images (build-base.yml) and the dev images
+# (build-dev.yml) side by side, and one job publishes both together:
 #
-# Caching strategy (3 layers):
-#   1. sources-patched/ — patched source trees (shared across arches)
-#   2. ccache — compiler object cache (per-arch)
-#   3. sources-build/ — full build output + stamp files (per-arch, most impactful)
+#   pull request      base images only, built and boot-tested; nothing published
+#   push to main      base + dev; publishes the "edge" pre-release (replaced on
+#                     every push; GitHub's "latest" release stays the newest tag)
+#   push of a tag     publishes the release of that tag (v*, release-*)
 #
-# Prerequisites:
-#   - Most submodules use HTTPS; linux-libre uses git:// (FSFLA limitation)
-#   - GitHub Actions runners support git:// protocol on port 9418
-#   - If linux-libre fetch fails, mirror it to GitHub and update .gitmodules
+# A commit is built once. A tag run first looks for the run of the same commit
+# on main: if that run succeeded, the tag run publishes its files (artifacts,
+# kept for 30 days) and builds nothing; if it is still running, the tag run
+# waits for it. Only a commit that main never built successfully (or whose
+# files expired) is built in the tag run itself.
 # ═══════════════════════════════════════════════════════════════════════════════
 
 name: Build & Release
@@ -27,344 +26,156 @@ on:
     branches: [main, master]
   workflow_dispatch:
 
-# Cancel in-progress runs for the same branch (but not tags)
+# Runs of a branch queue up (a newer push replaces a waiting run, so "edge"
+# follows the newest commit); pull requests cancel the run they replace.
 concurrency:
-  group: ${{ github.ref }}-${{ github.workflow }}
-  cancel-in-progress: ${{ github.ref_type != 'tag' }}
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+  actions: read
 
 jobs:
-  build:
-    name: Build (${{ matrix.arch }})
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      matrix:
-        include:
-          - { arch: x86_64, runner: ubuntu-24.04 }
-          - { arch: arm64, runner: ubuntu-24.04-arm }
-      fail-fast: false
-
+  # ── find: a finished build of this commit on main ───────────────────────────
+  # Tag runs only. Output run-id: the main run whose artifacts are published;
+  # empty: build here.
+  find:
+    name: Find the main build of this commit
+    runs-on: ubuntu-24.04
+    outputs:
+      run-id: ${{ steps.find.outputs.run-id }}
     steps:
-      # ── Checkout ──────────────────────────────────────────────────────────
-      # linux-libre uses git:// protocol (FSFLA doesn't serve HTTPS).
-      # actions/checkout@v4 struggles with git:// submodules on runners,
-      # so we init them manually after checkout.
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          submodules: false
-
-      # ── Cache: submodule checkouts ────────────────────────────────────────
-      # sources/<pkg> (shallow .git + files) of every base submodule, keyed on
-      # their pinned commits. fetch-submodules.sh skips a submodule already at
-      # its pinned commit, so a hit fetches nothing; an older cache (restore-
-      # keys) fetches only the submodules whose commit changed. Spares the
-      # flaky upstream hosts (GNU HTTP 429/500, FSFLA git://) most runs.
-      - name: Submodule cache key
-        id: submodule-key
-        run: |
-          echo "hash=$(git ls-tree -r HEAD sources | grep -v '	sources/toolchain/' |
-            sha256sum | cut -c1-24)" >> "$GITHUB_OUTPUT"
-
-      - name: Cache submodules
-        uses: actions/cache@v4
-        with:
-          path: |
-            sources/*
-            !sources/toolchain
-          key: submodules-${{ steps.submodule-key.outputs.hash }}
-          restore-keys: |
-            submodules-
-
-      - name: Initialize submodules
-        # Shallow, pinned-commit fetch, one submodule at a time with retries.
-        # Full `git submodule update --init --recursive` hits HTTP 429/500
-        # from the GNU hosts and clones ~GBs of history.
-        run: scripts/fetch-submodules.sh
-
-      # ── Cache keys ────────────────────────────────────────────────────────
-      - name: Compute cache keys
-        id: cache-keys
-        run: |
-          # Hash of submodule SHAs → invalidates when source code versions change
-          SUBMODULE_HASH=$(git submodule status | sha256sum | cut -d' ' -f1)
-          echo "submodule-hash=${SUBMODULE_HASH}" >> "$GITHUB_OUTPUT"
-
-          # Hash of build configuration → invalidates when build rules change
-          CONFIG_HASH=$( (sha256sum mk/*.mk mk/*.sh kernel-*.config .gitmodules 2>/dev/null) | sha256sum | cut -d' ' -f1)
-          echo "config-hash=${CONFIG_HASH}" >> "$GITHUB_OUTPUT"
-
-          echo "submodule-hash=${SUBMODULE_HASH}"
-          echo "config-hash=${CONFIG_HASH}"
-
-      # ── Cache: sources-patched/ ────────────────────────────────────────────
-      # Patched source trees (shared across arches). Keyed on submodule SHAs
-      # + patch files + mk rules that control patching. Exact key only: an
-      # older tree restored by prefix would keep its .patched stamps after a
-      # submodule bump, and make would not copy the new sources.
-      - name: Cache sources-patched
-        uses: actions/cache@v4
-        with:
-          path: sources-patched
-          key: sources-patched-${{ steps.cache-keys.outputs.submodule-hash }}-${{ hashFiles('sources-patches/**', 'mk/03-source-prep.mk') }}
-
-      # ── Cache: ccache ─────────────────────────────────────────────────────
-      # Compiler object cache (per-arch). Survives minor config changes via
-      # restore-keys fallback.
-      - name: Cache ccache
-        uses: actions/cache@v4
-        with:
-          path: ~/.ccache
-          key: ccache-native-${{ matrix.arch }}-${{ steps.cache-keys.outputs.config-hash }}
-          restore-keys: |
-            ccache-native-${{ matrix.arch }}-
-
-      # ── Cache: build output ────────────────────────────────────────────────
-      # Full per-arch build directories with `.built` stamp files. When the
-      # cache hits, `make` finds all stamp files and skips everything.
-      # Keyed on submodule SHAs + config. Exact key only: the stamps do not
-      # depend on mk/*.mk, so an older build restored by prefix would keep
-      # packages built with old configure flags; after a change everything is
-      # rebuilt (ccache makes that faster).
-      - name: Cache build output (${{ matrix.arch }})
-        uses: actions/cache@v4
-        with:
-          path: sources-build/${{ matrix.arch }}
-          key: build-native-${{ matrix.arch }}-${{ steps.cache-keys.outputs.submodule-hash }}-${{ steps.cache-keys.outputs.config-hash }}
-
-      - uses: ./.github/actions/setup-host
-        with:
-          build: true
-
-      - name: Set up ccache
-        run: |
-          sudo mkdir -p /usr/lib/ccache
-          for c in gcc g++ cc; do sudo ln -sf /usr/bin/ccache /usr/lib/ccache/$c; done
-          # Put the wrappers first on PATH for all later steps. (A step-level
-          # `PATH: "/usr/lib/ccache:${{ env.PATH }}"` breaks PATH: env.PATH only
-          # holds workflow-defined variables, so it expands to empty.)
-          echo "/usr/lib/ccache" >> "$GITHUB_PATH"
-          ccache --max-size=500M
-          ccache --zero-stats 2>/dev/null || true
-
-      - name: Check build environment
-        run: |
-          gcc -dumpmachine; gcc --version | head -1; make --version | head -1
-          make ARCH=${{ matrix.arch }} check-env
-
-      # ── Build ─────────────────────────────────────────────────────────────
-      - name: Build ${{ matrix.arch }} userland + kernel
-        run: |
-          # If build cache restored .built stamps, make will skip everything
-          make ARCH=${{ matrix.arch }} userland-${{ matrix.arch }}
-          make ARCH=${{ matrix.arch }} kernel
-
-      - name: Install ${{ matrix.arch }} to rootfs
-        run: |
-          make ARCH=${{ matrix.arch }} install-${{ matrix.arch }}
-          make ARCH=${{ matrix.arch }} install-kernel-${{ matrix.arch }}
-
-      - name: Show ccache stats
-        if: always()
-        run: ccache --show-stats || true
-
-      # ── Disk Image ────────────────────────────────────────────────────────
-      - name: Create ${{ matrix.arch }} disk image
-        run: make disk-image-${{ matrix.arch }}
-
-      # ── Stage release files ───────────────────────────────────────────────
-      # Final asset names, one artifact per arch: the test job boots exactly
-      # these files and the release job publishes them.
-      - name: Stage ${{ matrix.arch }} release files
-        run: |
-          A=${{ matrix.arch }}
-          K=sources-build/$A/linux-libre
-          mkdir -p release
-          cp disks/disk-$A.img release/linux-libre-vm-$A.img
-          if [ "$A" = x86_64 ]; then
-            cp $K/arch/x86/boot/bzImage release/linux-libre-vmlinuz-$A
-          else
-            cp $K/arch/arm64/boot/Image.gz release/linux-libre-vmlinuz-$A
-          fi
-          cp $K/.config release/linux-libre-$A.config
-          cp $K/System.map release/linux-libre-$A.System.map
-          scripts/release-manifest.sh $A > release/MANIFEST-$A.txt
-          ls -lh release/
-          sed -n '1,/^## Files/p' release/MANIFEST-$A.txt
-
-      - name: Upload ${{ matrix.arch }} release files
-        uses: actions/upload-artifact@v4
-        with:
-          name: release-${{ matrix.arch }}
-          path: release/
-          if-no-files-found: error
-
-  # ── Boot test ─────────────────────────────────────────────────────────────
-  # Boots the staged image under QEMU on a runner of the same architecture
-  # (KVM when the runner offers it) and checks it with scripts/smoke-test.sh:
-  # serial console, DHCP, ssh key and password logins. Fails the run, and so
-  # blocks the release, when the system does not come up.
-  test:
-    name: Boot test (${{ matrix.arch }})
-    needs: build
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      matrix:
-        include:
-          - { arch: x86_64, runner: ubuntu-24.04 }
-          - { arch: arm64, runner: ubuntu-24.04-arm }
-      fail-fast: false
-
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: false
-
-      - uses: ./.github/actions/setup-host
-        with:
-          qemu: true
-
-      - name: Download ${{ matrix.arch }} release files
-        uses: actions/download-artifact@v4
-        with:
-          name: release-${{ matrix.arch }}
-          path: release/
-
-      - name: Smoke test
+      - id: find
+        if: github.ref_type == 'tag'
         env:
-          ARCH: ${{ matrix.arch }}
-          KERNEL: release/linux-libre-vmlinuz-${{ matrix.arch }}
-          DISK: release/linux-libre-vm-${{ matrix.arch }}.img
-        run: scripts/smoke-test.sh
+          GH_TOKEN: ${{ github.token }}
+          MAIN: ${{ github.event.repository.default_branch }}
+          NEED: release-x86_64 release-arm64 sources dev-x86_64 dev-arm64 dev-sources
+        run: |
+          api="repos/$GITHUB_REPOSITORY/actions"
+          runs() {
+            gh api "$api/workflows/build-release.yml/runs?head_sha=$GITHUB_SHA&branch=$MAIN&per_page=50" \
+              --jq '[.workflow_runs[] | select(.event == "push" or .event == "workflow_dispatch")]'
+          }
+          complete() {   # run $1 still has every artifact the release needs
+            have=" $(gh api "$api/runs/$1/artifacts?per_page=100" \
+              --jq '[.artifacts[] | select(.expired | not) | .name] | join(" ")') "
+            for a in $NEED; do case $have in *" $a "*) ;; *) return 1 ;; esac; done
+          }
+          # A tag pushed together with its commit: give the main run time to appear
+          r=$(runs); [ "$(jq length <<<"$r")" -gt 0 ] || { sleep 60; r=$(runs); }
+          deadline=$((SECONDS + 340 * 60))
+          while :; do
+            for id in $(jq -r '.[] | select(.conclusion == "success") | .id' <<<"$r"); do
+              if complete "$id"; then
+                echo "publishing the files of main run $id"
+                echo "run-id=$id" >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+            done
+            if [ "$(jq '[.[] | select(.status != "completed")] | length' <<<"$r")" = 0 ]; then
+              echo "no successful run of $GITHUB_SHA on $MAIN with its files: building here"
+              exit 0
+            fi
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::error::the main run of $GITHUB_SHA is still running: re-run this workflow when it has finished"
+              exit 1
+            fi
+            echo "the main run of $GITHUB_SHA is still running; waiting"
+            sleep 120
+            r=$(runs)
+          done
 
-      - name: QEMU log
-        if: failure()
-        run: cat build/qemu/*/qemu.log || true
+  base:
+    name: Base
+    needs: find
+    if: needs.find.outputs.run-id == ''
+    uses: ./.github/workflows/build-base.yml
 
-  # ── Release ────────────────────────────────────────────────────────────────
-  release:
-    name: Create GitHub Release
-    if: startsWith(github.ref, 'refs/tags/')
-    needs: [build, test]
+  dev:
+    name: Dev
+    needs: find
+    if: needs.find.outputs.run-id == '' && github.event_name != 'pull_request'
+    uses: ./.github/workflows/build-dev.yml
+
+  # ── publish: base + dev files into one release ──────────────────────────────
+  publish:
+    name: Publish ${{ github.ref_type == 'tag' && github.ref_name || 'edge' }}
+    needs: [find, base, dev]
+    if: >-
+      !cancelled() && needs.find.result == 'success' &&
+      (github.ref_type == 'tag' ||
+       github.ref == format('refs/heads/{0}', github.event.repository.default_branch)) &&
+      github.event_name != 'pull_request' &&
+      (needs.find.outputs.run-id != '' ||
+       (needs.base.result == 'success' && needs.dev.result == 'success'))
     runs-on: ubuntu-24.04
     permissions:
       contents: write
-
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      NAME: ${{ github.ref_type == 'tag' && github.ref_name || 'edge' }}
+      RUN: ${{ needs.find.outputs.run-id || github.run_id }}
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: false
 
-      - name: Download release files
-        uses: actions/download-artifact@v4
+      # From this run, or from the main run that `find` chose
+      - uses: actions/download-artifact@v4
         with:
           pattern: release-*
-          path: release/
+          path: base/
           merge-multiple: true
-
-      # The images contain GPL software (Linux-libre, bash, coreutils, ...):
-      # publish the exact corresponding source next to them. GitHub's own
-      # "Source code" archives do not include submodules. Fetched fresh from
-      # upstream here, not from the submodule cache.
-      - name: Fetch sources
-        run: scripts/fetch-submodules.sh
-
-      - name: Source tarball
-        run: |
-          tar --exclude=.git --exclude=sources/toolchain \
-            --sort=name --owner=0 --group=0 --numeric-owner \
-            --mtime="@$(git log -1 --format=%ct)" \
-            --transform "s|^|linux-libre-vm-${GITHUB_REF_NAME}/|" \
-            -cf - Makefile README.md mk scripts templates kernel-*.config \
-                  sources sources-patches vm docs |
-            xz -T0 -6 > release/linux-libre-vm-src-${GITHUB_REF_NAME}.tar.xz
-
-      - name: Compress disk images
-        run: xz -T0 -9 -k release/linux-libre-vm-*.img
-
-      - name: Create checksums
-        working-directory: release
-        run: |
-          sha256sum * > SHA256SUMS
-          cat SHA256SUMS
-          ls -lh
-
-      - name: Generate release notes
-        run: |
-          T=${GITHUB_REF_NAME}
-          cat > release-notes.md <<EOF
-          ## Super Minimal Linux Libre ${T}
-
-          Minimal GNU/Linux system: Linux-libre kernel, GNU userland, glibc, runit.
-          Both images boot straight to a root shell on the serial console,
-          configure \`eth0\` by DHCP and run an OpenSSH server (root, key login only).
-
-          ### Run it
-
-          With this repository (UTM on Apple Silicon, or QEMU anywhere): the VM
-          scripts download this release by default.
-
-          \`\`\`bash
-          make utm-create utm-start utm-console        # macOS + UTM, arm64
-          make qemu-start qemu-console                 # QEMU, arm64 (QEMU_ARCH=x86_64 for the other)
-          \`\`\`
-
-          With plain QEMU (\`unxz\` the images first, or use the uncompressed ones):
-
-          \`\`\`bash
-          # x86_64 (q35, virtio-pci)
-          qemu-system-x86_64 -M q35 -m 256 -nographic -nodefaults -serial mon:stdio \\
-            -kernel linux-libre-vmlinuz-x86_64 -append "root=/dev/vda rw console=ttyS0" \\
-            -drive file=linux-libre-vm-x86_64.img,format=raw,if=none,id=drive0 \\
-            -device virtio-blk-pci,drive=drive0 \\
-            -netdev user,id=net0 -device virtio-net-pci,netdev=net0
-
-          # arm64 (virt, virtio-mmio: the kernel has no PCI)
-          qemu-system-aarch64 -M virt -cpu cortex-a57 -m 256 -nographic -nodefaults -serial mon:stdio \\
-            -kernel linux-libre-vmlinuz-arm64 -append "root=/dev/vda rw console=ttyAMA0" \\
-            -drive file=linux-libre-vm-arm64.img,format=raw,if=none,id=drive0 \\
-            -device virtio-blk-device,drive=drive0 \\
-            -netdev user,id=net0 -device virtio-net-device,netdev=net0
-          \`\`\`
-
-          Add \`-accel kvm -cpu host\` (Linux, same architecture) or \`-accel hvf -cpu host\`
-          (macOS, arm64) for hardware acceleration. Quit with Ctrl-a x.
-
-          SSH: the images contain no keys and no passwords. Add your public key to
-          \`/root/.ssh/authorized_keys\` on the serial console, forward a port
-          (\`-netdev user,id=net0,hostfwd=tcp:127.0.0.1:2222-:22\`, or \`SSH_PORT=2222\`
-          with the VM scripts), then \`ssh -p 2222 root@127.0.0.1\`.
-
-          ### Assets
-
-          | File | Description |
-          |------|-------------|
-          | \`linux-libre-vm-{x86_64,arm64}.img.xz\` | root filesystem: raw ext4, no partition table (xz) |
-          | \`linux-libre-vm-{x86_64,arm64}.img\` | the same, uncompressed |
-          | \`linux-libre-vmlinuz-{x86_64,arm64}\` | kernel (x86_64 bzImage, arm64 Image.gz), booted directly |
-          | \`linux-libre-{x86_64,arm64}.config\` | kernel configuration |
-          | \`linux-libre-{x86_64,arm64}.System.map\` | kernel symbol map (for debugging) |
-          | \`MANIFEST-{x86_64,arm64}.txt\` | upstream versions, toolchain, host libraries, file list |
-          | \`linux-libre-vm-src-${T}.tar.xz\` | complete corresponding source: all upstream sources, patches and build system |
-          | \`SHA256SUMS\` | checksums of all assets |
-
-          glibc, libgcc and the other runtime libraries are copied from the Ubuntu
-          24.04 build host; \`MANIFEST-*.txt\` lists their Ubuntu packages and
-          versions, whose source is available from Ubuntu.
-
-          ### Upstream versions
-
-          \`\`\`
-          $(sed -n '/^## Upstream sources/,/^$/p' release/MANIFEST-x86_64.txt | sed '1d;$d')
-          \`\`\`
-          EOF
-          cat release-notes.md
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+          run-id: ${{ env.RUN }}
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
         with:
-          name: Release ${{ github.ref_name }}
-          body_path: release-notes.md
-          files: release/*
-          draft: false
-          prerelease: false
-          generate_release_notes: false
+          name: sources
+          path: base/
+          run-id: ${{ env.RUN }}
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: dev-*
+          path: dev/
+          merge-multiple: true
+          run-id: ${{ env.RUN }}
+          github-token: ${{ github.token }}
+
+      # SHA256SUMS covers the base files (vm/release.sh reads it), SHA256SUMS-dev
+      # the dev files
+      - name: Name the source tarballs, checksums
+        run: |
+          mv base/linux-libre-vm-src.tar.xz "base/linux-libre-vm-src-$NAME.tar.xz"
+          mv dev/linux-libre-vm-dev-src.tar.xz "dev/linux-libre-vm-dev-src-$NAME.tar.xz"
+          (cd base && sha256sum * > SHA256SUMS && cat SHA256SUMS)
+          (cd dev && sha256sum * > SHA256SUMS-dev && cat SHA256SUMS-dev)
+          ls -lh base dev
+          [ "$RUN" = "$GITHUB_RUN_ID" ] || echo "files of run https://github.com/$GITHUB_REPOSITORY/actions/runs/$RUN"
+
+      - name: Release notes
+        run: scripts/release-notes.sh "$NAME" base > notes.md && cat notes.md
+
+      # The tag moves with main: the old release and its tag go first
+      - name: Publish edge
+        if: github.ref_type != 'tag'
+        run: |
+          gh release delete edge --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes 2>/dev/null || true
+          gh release create edge --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --prerelease --latest=false --title "Edge (main, ${GITHUB_SHA::12})" \
+            --notes-file notes.md base/* dev/*
+
+      # A re-run updates the release it created
+      - name: Publish ${{ github.ref_name }}
+        if: github.ref_type == 'tag'
+        run: |
+          if gh release view "$NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$NAME" --repo "$GITHUB_REPOSITORY" --clobber base/* dev/*
+            gh release edit "$NAME" --repo "$GITHUB_REPOSITORY" --title "Release $NAME" --notes-file notes.md
+          else
+            gh release create "$NAME" --repo "$GITHUB_REPOSITORY" --verify-tag --latest \
+              --title "Release $NAME" --notes-file notes.md base/* dev/*
+          fi

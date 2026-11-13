@@ -1,6 +1,14 @@
 # ═══════════════════════════════════════════════════════════════════════════════
 # Dev image: native toolchain (incl. Python, Node.js) and cross toolchains,
-# for both hosts (see docs/ci-dev.md)
+# for both hosts (reusable workflow, see docs/ci-dev.md)
+#
+# Called by build-release.yml next to build-base.yml, so one run builds both
+# and one release carries both. Uploads the dev files as artifacts of the
+# calling run:
+#
+#   dev-<arch>    dev image (.img.xz, split if over 2 GiB), kernel,
+#                 cross toolchain tarballs, MANIFEST-dev-<arch>.txt
+#   dev-sources   linux-libre-vm-dev-src.tar.xz (corresponding source)
 #
 # Each host (x86_64, arm64) builds on a runner of its own architecture: the
 # toolchain targets are native only. Every job caches its output under a key
@@ -16,22 +24,12 @@
 #
 # `assemble` restores every cache (no stage output is passed as an artifact),
 # builds the dev image and checks it (scripts/smoke-test.sh PROFILE=dev).
-# A release tag (v*, release-*) also adds the dev files to that tag's release,
-# the one build-release.yml creates with the base images. Caches of `main`
-# are visible to tag runs: run the workflow on main first (workflow_dispatch),
-# then push the tag, and the tag run only assembles and uploads.
 # ═══════════════════════════════════════════════════════════════════════════════
 
-name: Build dev image
+name: Dev image
 
 on:
-  workflow_dispatch:
-  push:
-    tags: ["v*", "release-*"]
-
-concurrency:
-  group: ${{ github.ref }}-${{ github.workflow }}
-  cancel-in-progress: false
+  workflow_call:
 
 env:
   # Same fixed path in every job: pybin/ links into root/ by absolute path,
@@ -65,7 +63,7 @@ jobs:
                          sha256sum mk/00-vars.mk mk/14-toolchain.mk scripts/fetch-toolchain.sh; } | h)
           cross=$( { sm $T/binutils $T/gcc $T/glibc sources/linux-libre
                      sha256sum mk/00-vars.mk mk/14-toolchain.mk mk/15-cross-toolchain.mk scripts/fetch-toolchain.sh; } | h)
-          # Same key as the submodule cache in build-release.yml (one shared entry)
+          # Same key as the submodule cache in build-base.yml (one shared entry)
           submodules=$(git ls-tree -r HEAD sources | grep -v "	$T/" | sha256sum | cut -c1-24)
           for v in base toolchain cross submodules; do echo "$v=${!v}" | tee -a "$GITHUB_OUTPUT"; done
 
@@ -96,7 +94,7 @@ jobs:
         uses: ./.github/actions/setup-host
         with:
           build: true
-      # Base submodule checkouts (shared with build-release.yml): the build
+      # Base submodule checkouts (shared with build-base.yml): the build
       # directories link into sources/ (gnulib's bootstrap symlinks
       # GNUmakefile, maint.mk ... to sources/gnulib), so they are needed to
       # install from a restored build, not only to build
@@ -227,7 +225,7 @@ jobs:
           free-disk: true
           build: true
           qemu: true
-      # Base submodule checkouts (shared with build-release.yml): the build
+      # Base submodule checkouts (shared with build-base.yml): the build
       # directories link into sources/ (gnulib's bootstrap symlinks
       # GNUmakefile, maint.mk ... to sources/gnulib), so they are needed to
       # install from a restored build, not only to build
@@ -366,81 +364,33 @@ jobs:
           name: dev-${{ matrix.arch }}
           path: release/
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 30
 
-  # ── release: dev files into the tag's release ─────────────────────────────
-  release:
-    name: Add dev files to the release
-    if: startsWith(github.ref, 'refs/tags/')
-    needs: assemble
+  # ── sources: corresponding source of the toolchains ─────────────────────────
+  # gcc, glibc, binutils, ... are GPL/LGPL: publish the exact source the
+  # toolchains were built from (submodules + pinned tarballs). The tag or
+  # "edge" goes into the asset name when it is published.
+  sources:
+    name: Toolchain source tarball
     runs-on: ubuntu-24.04
-    permissions:
-      contents: write
-    env:
-      GH_TOKEN: ${{ github.token }}
-      TAG: ${{ github.ref_name }}
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: false
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: dev-*
-          path: release/
-          merge-multiple: true
-
-      # gcc, glibc, binutils, ... are GPL/LGPL: publish the exact source the
-      # toolchains were built from (submodules + pinned tarballs)
       - name: Toolchain source tarball
         run: |
           scripts/fetch-submodules.sh sources/linux-libre
           scripts/fetch-toolchain.sh
+          mkdir -p release
           tar --exclude=.git --sort=name --owner=0 --group=0 --numeric-owner \
             --mtime="@$(git log -1 --format=%ct)" \
-            --transform "s|^|linux-libre-vm-${TAG}/|" \
+            --transform "s|^|linux-libre-vm-$(git rev-parse --short=12 HEAD)/|" \
             -cf - Makefile README.md mk scripts kernel-*.config docs sources/toolchain sources/linux-libre |
-            xz -T0 -6 > release/linux-libre-vm-dev-src-${TAG}.tar.xz
-
-      # SHA256SUMS belongs to the base files; the dev files get their own
-      - name: Checksums
-        working-directory: release
-        run: |
-          sha256sum * > SHA256SUMS-dev
-          cat SHA256SUMS-dev
-          ls -lh
-
-      # build-release.yml creates the release (base images, notes); it may
-      # still be running: wait for it, up to 3 hours
-      - name: Wait for the release
-        run: |
-          for i in $(seq 180); do
-            gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 && exit 0
-            sleep 60
-          done
-          echo "::error::release $TAG does not exist (did Build & Release fail?)"; exit 1
-
-      - name: Upload dev files
-        run: gh release upload "$TAG" release/* --clobber --repo "$GITHUB_REPOSITORY"
-
-      - name: Add the dev files to the release notes
-        run: |
-          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body -q .body > notes.md
-          grep -q '^### Dev images' notes.md || cat >> notes.md <<EOF
-
-          ### Dev images
-
-          The base image plus a toolchain built from pinned sources (gcc, binutils,
-          glibc, make, perl, Python, Node.js) and cross compilers for seven targets
-          under \`/opt/cross\`. See
-          [docs/ci-dev.md](https://github.com/${GITHUB_REPOSITORY}/blob/${TAG}/docs/ci-dev.md).
-
-          | File | Content |
-          |------|---------|
-          | \`linux-libre-vm-dev-<arch>.img.xz\` | dev disk image (8 GB when unpacked; \`.partNN\` pieces: \`cat\` them together) |
-          | \`linux-libre-vmlinuz-dev-<arch>\` | kernel to boot it |
-          | \`cross-<triplet>.<host arch>.tar.gz\` | each cross toolchain on its own, relocatable |
-          | \`MANIFEST-dev-<arch>.txt\` | source commits, build host, sizes |
-          | \`linux-libre-vm-dev-src-${TAG}.tar.xz\` | corresponding source |
-          | \`SHA256SUMS-dev\` | checksums of the dev files |
-          EOF
-          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file notes.md
+            xz -T0 -6 > release/linux-libre-vm-dev-src.tar.xz
+          ls -lh release/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dev-sources
+          path: release/
+          if-no-files-found: error
+          retention-days: 30

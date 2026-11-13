@@ -1,14 +1,16 @@
 # Dev image in CI
 
 `.github/workflows/build-dev.yml` builds the dev images and cross toolchains
-for both hosts on GitHub runners and publishes them.
+for both hosts on GitHub runners. It is a reusable workflow: the
+`Build & Release` workflow (`build-release.yml`) runs it next to the base
+images (`build-base.yml`) and publishes both in one release.
 
 The dev image ([self-hosting.md](self-hosting.md)) and the cross toolchains
 ([cross-toolchains.md](cross-toolchains.md)) are build-once artifacts, like the
 base image: built from pinned sources, published as release assets and then
 used as they are. Nothing is rebuilt inside a VM.
 
-## Why a separate workflow, split into jobs
+## Why its own workflow file, split into jobs
 
 - The toolchain targets build for the host's own architecture only
   (`TC_ARCH`), so each dev image needs a runner of its architecture:
@@ -18,12 +20,29 @@ used as they are. Nothing is rebuilt inside a VM.
   independent of the native one and run as jobs of their own, in parallel.
   The native toolchain (`make toolchain`, Node included) is one job that
   can be resumed (below).
-- It runs rarely (build once), so it does not belong in `build-release.yml`,
-  which runs on every push.
+- Its stages change rarely (build once): on most pushes every stage is
+  cached and only `base` and `assemble` do work.
 
-Triggers: `workflow_dispatch`, and the release tags of `build-release.yml`
-(`v*`, `release-*`): pushing one tag gives one release with both the base and
-the dev files (below).
+## When it runs
+
+`build-release.yml` calls it on every push to `main` and on release tags
+(`v*`, `release-*`), not on pull requests. Each commit is built once:
+
+| Event | Builds | Publishes |
+|-------|--------|-----------|
+| pull request | base images only | nothing |
+| push to `main` | base + dev | the `edge` pre-release: base and dev files of that commit, replaced on every push |
+| tag | nothing, when `main` built the commit successfully; base + dev otherwise | the tag's release: base and dev files together |
+
+A tag run starts with the `find` job: it looks for the successful
+`Build & Release` run of the same commit on `main` and, if one still has all
+its artifacts (kept 30 days), the `publish` job takes the files from that run.
+A `main` run of the commit that is still going is waited for (up to 5 h 40 min;
+after that the job fails and the tag run is re-run once `main` is done). Only
+a commit that `main` never built successfully is built in the tag run.
+
+`main` runs queue instead of cancelling each other, and a newer push replaces
+a run that is still waiting, so `edge` follows the newest commit.
 
 ## Jobs (per host: x86_64, arm64)
 
@@ -35,8 +54,9 @@ the dev files (below).
 | `assemble` | `install-dev`, `disk-image-dev`, smoke test | all of the above | ~20 min |
 
 A small `keys` job computes the cache keys first. `base`, `toolchain` and
-the 14 `cross` jobs all run in parallel; then, on a release tag, `release`
-adds both hosts' dev files to that tag's release.
+the 14 `cross` jobs all run in parallel, and a `sources` job packs the
+toolchain sources. The dev files are artifacts of the run; publishing them is
+`build-release.yml`'s `publish` job.
 
 Host tools are fine for building: the toolchain's programs are built with the
 runner's gcc. What goes into the image comes from the pinned sources.
@@ -81,12 +101,10 @@ room on its disk.
 - GitHub keeps up to 10 GB of caches per repository and evicts entries not
   used for 7 days. Estimated per host: `toolchain` ~0.7 GB (plus older
   partial saves until they are evicted), cross ~0.8 GB; with `base` about
-  3–4 GB for both hosts, next to the caches of `build-release.yml`.
-- A run can restore caches of its own ref and of the default branch. Run
-  the workflow on `main` first (`workflow_dispatch`), then push the release
-  tag: the tag run finds every stage cached and only assembles and uploads.
-  Without that, the tag run builds everything (several hours) before the
-  dev files appear on the release.
+  3–4 GB for both hosts, next to the caches of `build-base.yml`.
+- A run can restore caches of its own ref and of the default branch. `main`
+  builds every commit, so its caches are the ones that stay warm; a tag of a
+  built commit restores no cache at all (it publishes `main`'s artifacts).
 - Caches are a speedup only. The release assets are what is kept.
 
 ## Smoke test
@@ -96,19 +114,17 @@ same script as `make test-dev` and the base workflow's boot test): serial
 console, DHCP, ssh login with a throwaway key and ssh password login as a
 test user (SHA-512 hash), then over ssh compiling and running a C and a C++
 program, one cross compiler per target (`<triplet>-gcc -c`), `make`, `python3 -c 'import zlib, bz2'` and `node -e`. The run fails,
-and no dev files are added to the release, if any check fails. QEMU uses KVM when the runner
+and nothing is published, if any check fails. QEMU uses KVM when the runner
 offers it, TCG otherwise (slow but enough for these commands).
 
 Shared steps (disk cleanup, packages, QEMU with KVM) are the composite action
-`.github/actions/setup-host`, used by both workflows.
+`.github/actions/setup-host`, used by both build workflows.
 
-## Release assets (release tag)
+## Release assets
 
-A tag starts both workflows. `build-release.yml` creates the release with the
-base images and its notes; this workflow's `release` job waits for that
-release (up to 3 hours), uploads the dev files to it and adds a "Dev images"
-section to the notes. The base files are usually there long before the dev
-files.
+The `publish` job of `build-release.yml` creates the release (`edge` or the
+tag) with the base and the dev files at once, and one set of notes for both.
+SHA256SUMS lists the base files, `SHA256SUMS-dev` the dev files. The dev files:
 
 | File | Content |
 |------|---------|

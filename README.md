@@ -29,7 +29,8 @@ make qemu-arm64         # boot arm64 in QEMU (Ctrl-C to exit)
 
 To just run it, nothing has to be built: the VM targets download the latest
 [release](https://github.com/stan-kondrat/linux-libre-vm/releases) by default
-(`VM_SOURCE=local` uses your own build). On an Apple Silicon Mac, the arm64
+(`VM_SOURCE=local` uses your own build, `VM_RELEASE=edge` the newest build of
+`main`). On an Apple Silicon Mac, the arm64
 image runs in UTM with hardware virtualization:
 `make utm-create utm-start utm-console`. See [docs/utm.md](docs/utm.md).
 With plain QEMU on any host (including inside a Linux build VM):
@@ -46,6 +47,7 @@ rebuilds itself.
 - [docs/self-hosting.md](docs/self-hosting.md): the native toolchain and the dev image
 - [docs/cross-toolchains.md](docs/cross-toolchains.md): the cross toolchains
 - [docs/ci-dev.md](docs/ci-dev.md): building and publishing both in GitHub CI
+  (each commit on `main` is built once; its tag publishes that build)
 
 ---
 
@@ -111,6 +113,7 @@ linux-libre-vm/
 │   ├── fetch-submodules.sh      shallow, pinned submodule fetch
 │   ├── fetch-toolchain.sh       toolchain sources + pinned tarballs
 │   ├── release-manifest.sh      release manifest (versions, libraries, files)
+│   ├── release-notes.sh         GitHub release notes (CI)
 │   └── smoke-test.sh            boot an image, check console, DHCP, ssh key/password login (make test, CI)
 │
 ├── sources/                      git submodules (NEVER modified)

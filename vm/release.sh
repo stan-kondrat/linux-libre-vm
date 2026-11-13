@@ -15,7 +15,8 @@
 #   help
 #
 # Environment:
-#   VM_RELEASE  release tag, or "latest"   (default: latest)
+#   VM_RELEASE  release tag, "latest", or "edge" (newest build of main)
+#                                           (default: latest)
 #   VM_REPO     GitHub owner/repo           (default: from the git remote
 #                                            "origin", else stan-kondrat/linux-libre-vm)
 #   GH_TOKEN    optional, raises the GitHub API rate limit for "latest"/list
@@ -98,6 +99,16 @@ cmd_fetch() {
 	TAG=$(cmd_tag)
 	DIR=$CACHE/$TAG
 	mkdir -p "$DIR"
+	# edge is replaced on every push to main: refresh its checksums, so that
+	# files of an older edge build no longer match and are downloaded again
+	if [ "$TAG" = edge ] && [ -f "$DIR/SHA256SUMS" ]; then
+		if curl -fsL -o "$DIR/SHA256SUMS.part" "$DL/$TAG/SHA256SUMS"; then
+			mv "$DIR/SHA256SUMS.part" "$DIR/SHA256SUMS"
+		else
+			rm -f "$DIR/SHA256SUMS.part"
+			say "cannot refresh edge; using the cached build"
+		fi
+	fi
 	if [ ! -f "$DIR/SHA256SUMS" ]; then
 		curl -fsL -o "$DIR/SHA256SUMS.part" "$DL/$TAG/SHA256SUMS" ||
 			{ rmdir "$DIR" 2>/dev/null; die "release $TAG not found in $VM_REPO (see: vm/release.sh list)"; }
