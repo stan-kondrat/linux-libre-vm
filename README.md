@@ -49,6 +49,16 @@ rebuilds itself.
 - [docs/ci-dev.md](docs/ci-dev.md): building and publishing both in GitHub CI
   (each commit on `main` is built once; its tag publishes that build)
 
+The dev image is also a container image, so a CI job can build inside it:
+
+```yaml
+runs-on: ubuntu-24.04            # or ubuntu-24.04-arm
+container: ghcr.io/stan-kondrat/linux-libre-vm-dev:v0.4.0
+```
+
+`/usr/share/linux-libre-vm/release` (and `/etc/os-release`) in the container and in
+the disk image say which release it is. See [docs/ci-dev.md](docs/ci-dev.md#container-image).
+
 ---
 
 ## Git Submodules

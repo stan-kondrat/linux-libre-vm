@@ -14,6 +14,21 @@
 # kept for 30 days) and builds nothing; if it is still running, the tag run
 # waits for it. Only a commit that main never built successfully (or whose
 # files expired) is built in the tag run itself.
+#
+# A tag publishes the build of its commit from `main`, made before the tag
+# existed, so the dev image inside says "edge". The `retag` job writes the tag
+# into the image (scripts/retag-image.sh) and compresses it again; the release
+# and the container use that image.
+#
+# The dev image is also published as a container on ghcr.io, from the same
+# build as the release's .img.xz (the rootfs-<arch> artifacts):
+#
+#   ghcr.io/stan-kondrat/linux-libre-vm-dev:<tag>          linux/arm64 + linux/amd64
+#   ghcr.io/stan-kondrat/linux-libre-vm-dev:<tag>-<arch>   one architecture
+#
+# <tag> is the release tag, or "edge" on main. A per-arch image is tested
+# (container-test.sh as root and uid 1000, then as a job container) before
+# the multi-arch tag points at it.
 # ═══════════════════════════════════════════════════════════════════════════════
 
 name: Build & Release
@@ -51,7 +66,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           MAIN: ${{ github.event.repository.default_branch }}
-          NEED: release-x86_64 release-arm64 sources dev-x86_64 dev-arm64 dev-sources
+          NEED: release-x86_64 release-arm64 sources dev-x86_64 dev-arm64 dev-sources rootfs-x86_64 rootfs-arm64
         run: |
           api="repos/$GITHUB_REPOSITORY/actions"
           runs() {
@@ -99,15 +114,72 @@ jobs:
     if: needs.find.outputs.run-id == '' && github.event_name != 'pull_request'
     uses: ./.github/workflows/build-dev.yml
 
+  # ── retag: the dev image says the tag it is published as ────────────────────
+  # Tag runs only. Per architecture: unpack the .img.xz, write the tag into the
+  # image, pack it again (unchanged when it already says the tag), and keep the
+  # new files and their checksums as artifacts of this run for `publish` and
+  # `container`. A loop mount needs root, which the runner offers through sudo.
+  retag:
+    name: Dev image identity (${{ matrix.arch }})
+    needs: [find, base, dev]
+    if: >-
+      !cancelled() && needs.find.result == 'success' &&
+      github.ref_type == 'tag' &&
+      (needs.find.outputs.run-id != '' ||
+       (needs.base.result == 'success' && needs.dev.result == 'success'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x86_64, arm64]
+    permissions:
+      contents: read
+      actions: read
+    env:
+      RUN: ${{ needs.find.outputs.run-id || github.run_id }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - uses: ./.github/actions/setup-host
+        with:
+          free-disk: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: dev-${{ matrix.arch }}
+          path: dev/
+          run-id: ${{ env.RUN }}
+          github-token: ${{ github.token }}
+      - name: Write the tag into the image
+        run: |
+          scripts/retag-image.sh ${{ matrix.arch }} "$GITHUB_REF_NAME" dev out
+          mkdir sha && mv out/img.sha256 sha/
+          ls -lh out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tagged-img-${{ matrix.arch }}
+          path: out/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tagged-sha-${{ matrix.arch }}
+          path: sha/
+          if-no-files-found: error
+          retention-days: 30
+
   # ── publish: base + dev files into one release ──────────────────────────────
   publish:
     name: Publish ${{ github.ref_type == 'tag' && github.ref_name || 'edge' }}
-    needs: [find, base, dev]
+    needs: [find, base, dev, retag]
     if: >-
       !cancelled() && needs.find.result == 'success' &&
       (github.ref_type == 'tag' ||
        github.ref == format('refs/heads/{0}', github.event.repository.default_branch)) &&
       github.event_name != 'pull_request' &&
+      (github.ref_type != 'tag' || needs.retag.result == 'success') &&
       (needs.find.outputs.run-id != '' ||
        (needs.base.result == 'success' && needs.dev.result == 'success'))
     runs-on: ubuntu-24.04
@@ -145,6 +217,18 @@ jobs:
           run-id: ${{ env.RUN }}
           github-token: ${{ github.token }}
 
+      # A tag: the dev images that say the tag (from `retag`, this run) replace
+      # the ones of the build
+      - name: Drop the dev images of the build
+        if: github.ref_type == 'tag'
+        run: rm -f dev/linux-libre-vm-dev-*.img.xz*
+      - uses: actions/download-artifact@v4
+        if: github.ref_type == 'tag'
+        with:
+          pattern: tagged-img-*
+          path: dev/
+          merge-multiple: true
+
       # SHA256SUMS covers the base files (vm/release.sh reads it), SHA256SUMS-dev
       # the dev files
       - name: Name the source tarballs, checksums
@@ -179,3 +263,121 @@ jobs:
             gh release create "$NAME" --repo "$GITHUB_REPOSITORY" --verify-tag --latest \
               --title "Release $NAME" --notes-file notes.md base/* dev/*
           fi
+
+  # ── container: the dev rootfs as an image on ghcr.io ────────────────────────
+  # Per host, on a runner of its architecture: import, push <tag>-<arch>, test.
+  container:
+    name: Container (${{ matrix.arch }})
+    needs: [find, base, dev, retag]
+    if: >-
+      !cancelled() && needs.find.result == 'success' &&
+      (github.ref_type == 'tag' ||
+       github.ref == format('refs/heads/{0}', github.event.repository.default_branch)) &&
+      github.event_name != 'pull_request' &&
+      (github.ref_type != 'tag' || needs.retag.result == 'success') &&
+      (needs.find.outputs.run-id != '' ||
+       (needs.base.result == 'success' && needs.dev.result == 'success'))
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x86_64, runner: ubuntu-24.04 }
+          - { arch: arm64, runner: ubuntu-24.04-arm }
+    permissions:
+      contents: read
+      actions: read
+      packages: write
+    env:
+      IMAGE: ghcr.io/stan-kondrat/linux-libre-vm-dev
+      TAG: ${{ github.ref_type == 'tag' && github.ref_name || 'edge' }}
+      RUN: ${{ needs.find.outputs.run-id || github.run_id }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: rootfs-${{ matrix.arch }}
+          path: rootfs/
+          run-id: ${{ env.RUN }}
+          github-token: ${{ github.token }}
+      # A tag: the checksum of the .img.xz the release carries (written by
+      # `retag`), not the one of the build it was made from
+      - uses: actions/download-artifact@v4
+        if: github.ref_type == 'tag'
+        with:
+          name: tagged-sha-${{ matrix.arch }}
+          path: tagged/
+      - name: Import
+        run: |
+          zstd -d --rm rootfs/rootfs-dev-${{ matrix.arch }}.tar.zst
+          # sha256 of the matching .img.xz (name:hash for each part when split)
+          f=rootfs/img.sha256; [ -f tagged/img.sha256 ] && f=tagged/img.sha256
+          if [ "$(wc -l < $f)" = 1 ]; then sha=$(cut -d' ' -f1 $f)
+          else sha=$(awk '{ printf "%s%s:%s", s, $2, $1; s = "," }' $f); fi
+          IMG_SHA=$sha REVISION=$GITHUB_SHA \
+            scripts/container-import.sh rootfs/rootfs-dev-${{ matrix.arch }}.tar ${{ matrix.arch }} "$TAG"
+          rm -rf rootfs
+          docker image inspect "$IMAGE:$TAG-${{ matrix.arch }}" --format '{{json .Config.Labels}}'
+      - name: Test as root and as uid 1000
+        run: |
+          for u in 0:0 1000:1000; do
+            docker run --rm --user $u -v "$PWD/scripts:/t:ro" "$IMAGE:$TAG-${{ matrix.arch }}" \
+              sh /t/container-test.sh "$TAG"
+          done
+      - name: Push
+        run: |
+          echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          docker push "$IMAGE:$TAG-${{ matrix.arch }}"
+
+  # The image as a job container, the way other projects use it: the runner
+  # mounts its node into it for actions/checkout
+  container-test:
+    name: Job container (${{ matrix.arch }})
+    needs: [find, container]
+    if: ${{ !cancelled() && needs.container.result == 'success' }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x86_64, runner: ubuntu-24.04 }
+          - { arch: arm64, runner: ubuntu-24.04-arm }
+    permissions:
+      contents: read
+      packages: read
+    container:
+      image: ghcr.io/stan-kondrat/linux-libre-vm-dev:${{ github.ref_type == 'tag' && github.ref_name || 'edge' }}-${{ matrix.arch }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - run: scripts/container-test.sh "${{ github.ref_type == 'tag' && github.ref_name || 'edge' }}"
+
+  # ── container-manifest: one multi-arch tag ──────────────────────────────────
+  container-manifest:
+    name: Container ${{ github.ref_type == 'tag' && github.ref_name || 'edge' }} (multi-arch)
+    needs: [find, container, container-test]
+    if: ${{ !cancelled() && needs.container-test.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE: ghcr.io/stan-kondrat/linux-libre-vm-dev
+      TAG: ${{ github.ref_type == 'tag' && github.ref_name || 'edge' }}
+    steps:
+      - name: Login
+        run: echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+      - name: Join the per-arch images
+        run: |
+          docker buildx imagetools create -t "$IMAGE:$TAG" \
+            "$IMAGE:$TAG-arm64" "$IMAGE:$TAG-x86_64"
+          docker buildx imagetools inspect "$IMAGE:$TAG"

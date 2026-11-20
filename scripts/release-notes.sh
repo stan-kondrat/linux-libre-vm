@@ -108,6 +108,16 @@ under \`/opt/cross\`. See
 | \`linux-libre-vm-dev-src-${T}.tar.xz\` | corresponding source |
 | \`SHA256SUMS-dev\` | checksums of the dev files |
 
+The same dev root filesystem is a container image for CI jobs, one tag for both
+architectures (linux/arm64, linux/amd64), built from the same run as the images
+above; \`/usr/share/linux-libre-vm/\` in it (and in the disk image) names the
+release and commit:
+
+\`\`\`yaml
+runs-on: ubuntu-24.04            # or ubuntu-24.04-arm
+container: ghcr.io/stan-kondrat/linux-libre-vm-dev:${T}
+\`\`\`
+
 ### Upstream versions
 
 \`\`\`

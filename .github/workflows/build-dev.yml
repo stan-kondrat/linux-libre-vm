@@ -9,6 +9,9 @@
 #   dev-<arch>    dev image (.img.xz, split if over 2 GiB), kernel,
 #                 cross toolchain tarballs, MANIFEST-dev-<arch>.txt
 #   dev-sources   linux-libre-vm-dev-src.tar.xz (corresponding source)
+#   rootfs-<arch> the dev root filesystem as a tarball (the container image's
+#                 content) and the sha256 of the .img.xz built from it; the
+#                 container is published from it by build-release.yml
 #
 # Each host (x86_64, arm64) builds on a runner of its own architecture: the
 # toolchain targets are native only. Every job caches its output under a key
@@ -216,6 +219,9 @@ jobs:
           - { arch: arm64, runner: ubuntu-24.04-arm }
     env:
       CK: ${{ needs.keys.outputs.cross }}
+      # Written into the image (/usr/share/linux-libre-vm, /etc/os-release)
+      RELEASE: ${{ github.ref_type == 'tag' && github.ref_name || 'edge' }}
+      COMMIT: ${{ github.sha }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -306,7 +312,7 @@ jobs:
 
       - name: Dev rootfs + disk image
         run: |
-          make install-dev disk-image-dev
+          make install-dev-release disk-image-dev
           for t in arm64 x86_64 armv6 armv7 riscv64 i686 i686-sse2; do
             make --no-print-directory TARGET=$t cross-toolchain-dist
           done
@@ -321,18 +327,8 @@ jobs:
           if [ "$A" = x86_64 ]; then cp $K/arch/x86/boot/bzImage release/linux-libre-vmlinuz-dev-$A
           else cp $K/arch/arm64/boot/Image.gz release/linux-libre-vmlinuz-dev-$A; fi
           cp "$TOOLCHAIN_WORK"/cross/dist/cross-*.tar.gz release/
-          {
-            echo "linux-libre-vm dev image $A"
-            echo "commit:  $(git rev-parse HEAD) ($(git describe --tags --always 2>/dev/null))"
-            echo "built:   $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-            echo "runner:  ${ImageOS:-?} ${ImageVersion:-?} ($(uname -m)), host gcc $(gcc -dumpfullversion)"
-            echo; echo "## Toolchain sources (submodule commits)"
-            git ls-tree HEAD sources/toolchain/ sources/linux-libre | awk '{ print $3, $4 }'
-            echo; echo "## Cross toolchains"
-            for f in "$TOOLCHAIN_WORK"/cross/*/*/BUILD-INFO; do echo; cat "$f"; done
-            echo; echo "## Sizes"
-            du -sh "$TOOLCHAIN_WORK/rootfs-dev" "$TOOLCHAIN_WORK"/cross/*/*-linux-* 2>/dev/null
-          } > release/MANIFEST-dev-$A.txt
+          # the manifest is also inside the image (written by install-dev-release)
+          cp "$TOOLCHAIN_WORK/rootfs-dev/usr/share/linux-libre-vm/MANIFEST-dev-$A.txt" release/
           cat release/MANIFEST-dev-$A.txt
 
       - name: Smoke test
@@ -359,11 +355,30 @@ jobs:
           fi
           ls -lh
 
+      # The container image's content: the rootfs the disk image was made
+      # from (all files root-owned, as in the image), and the checksum of the
+      # .img.xz that goes into the image's labels
+      - name: Rootfs tarball
+        run: |
+          mkdir -p rootfs
+          tar -C "$TOOLCHAIN_WORK/rootfs-dev" --numeric-owner --owner=0 --group=0 --sort=name -c . |
+            zstd -T0 -3 -o rootfs/rootfs-dev-${{ matrix.arch }}.tar.zst
+          (cd release && sha256sum linux-libre-vm-dev-${{ matrix.arch }}.img.xz*) > rootfs/img.sha256
+          cat rootfs/img.sha256; ls -lh rootfs
+
       - uses: actions/upload-artifact@v4
         with:
           name: dev-${{ matrix.arch }}
           path: release/
           if-no-files-found: error
+          retention-days: 30
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rootfs-${{ matrix.arch }}
+          path: rootfs/
+          if-no-files-found: error
+          compression-level: 0
           retention-days: 30
 
   # ── sources: corresponding source of the toolchains ─────────────────────────

@@ -22,3 +22,4 @@ include mk/12-utm.mk
 include mk/13-qemu.mk
 include mk/14-toolchain.mk
 include mk/15-cross-toolchain.mk
+include mk/16-dev-release.mk

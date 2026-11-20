@@ -1,0 +1,104 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# One-off: publish the dev container of a release made before containers were
+# built by build-release.yml (v0.4.0), from the release's own .img.xz.
+#
+# Run it by hand (Actions → Backfill dev container → Run workflow, tag v0.4.0).
+# Releases from the one that has the rootfs-<arch> artifacts on do not need it.
+#
+# Per architecture: download the .img.xz and check it against SHA256SUMS-dev,
+# mount it read-only, tar the root filesystem, import it (the release tag,
+# the commit and MANIFEST-dev-<arch>.txt are added: the image has none),
+# test it as root and uid 1000, push <tag>-<arch>; then join both into <tag>.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+name: Backfill dev container
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag whose dev image is published as a container
+        required: true
+        default: v0.4.0
+
+permissions:
+  contents: read
+
+jobs:
+  backfill:
+    name: Container (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x86_64, runner: ubuntu-24.04 }
+          - { arch: arm64, runner: ubuntu-24.04-arm }
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE: ghcr.io/stan-kondrat/linux-libre-vm-dev
+      TAG: ${{ inputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      # The scripts come from the branch this runs on; the commit is the tag's
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+          fetch-depth: 0
+      - name: Release files
+        run: |
+          mkdir dl
+          gh release download "$TAG" --dir dl \
+            -p "linux-libre-vm-dev-${{ matrix.arch }}.img.xz*" \
+            -p "MANIFEST-dev-${{ matrix.arch }}.txt" -p SHA256SUMS-dev
+          (cd dl && sha256sum -c --ignore-missing SHA256SUMS-dev)
+          (cd dl && grep "linux-libre-vm-dev-${{ matrix.arch }}.img.xz" SHA256SUMS-dev) > dl/img.sha256
+          ls -lh dl
+      - name: Root filesystem
+        run: |
+          cd dl
+          cat linux-libre-vm-dev-${{ matrix.arch }}.img.xz* | unxz > disk.img
+          sudo mkdir /mnt/rootfs
+          sudo mount -o loop,ro disk.img /mnt/rootfs
+          sudo tar -C /mnt/rootfs --numeric-owner --exclude=./lost+found -c . > rootfs.tar
+          sudo umount /mnt/rootfs
+          rm disk.img
+          ls -lh rootfs.tar
+      - name: Import
+        run: |
+          if [ "$(wc -l < dl/img.sha256)" = 1 ]; then sha=$(cut -d' ' -f1 dl/img.sha256)
+          else sha=$(awk '{ printf "%s%s:%s", s, $2, $1; s = "," }' dl/img.sha256); fi
+          IMG_SHA=$sha REVISION=$(git rev-parse "refs/tags/$TAG^{commit}") \
+            MANIFEST_FILE=dl/MANIFEST-dev-${{ matrix.arch }}.txt \
+            scripts/container-import.sh dl/rootfs.tar ${{ matrix.arch }} "$TAG"
+          docker image inspect "$IMAGE:$TAG-${{ matrix.arch }}" --format '{{json .Config.Labels}}'
+      - name: Test as root and as uid 1000
+        run: |
+          for u in 0:0 1000:1000; do
+            docker run --rm --user $u -v "$PWD/scripts:/t:ro" "$IMAGE:$TAG-${{ matrix.arch }}" \
+              sh /t/container-test.sh "$TAG"
+          done
+      - name: Push
+        run: |
+          echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          docker push "$IMAGE:$TAG-${{ matrix.arch }}"
+
+  join:
+    name: Container ${{ inputs.tag }} (multi-arch)
+    needs: backfill
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE: ghcr.io/stan-kondrat/linux-libre-vm-dev
+      TAG: ${{ inputs.tag }}
+    steps:
+      - run: echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+      - run: |
+          docker buildx imagetools create -t "$IMAGE:$TAG" \
+            "$IMAGE:$TAG-arm64" "$IMAGE:$TAG-x86_64"
+          docker buildx imagetools inspect "$IMAGE:$TAG"
